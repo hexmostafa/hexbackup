@@ -56,20 +56,11 @@ chmod +x "${INSTALL_DIR}"/*.py
 print_color "1;32" "✔ Scripts downloaded."
 echo
 
-# --- CHANGE: Installing libraries with a check for --break-system-packages ---
+# --- CHANGE: Installing libraries with a more robust method ---
 print_color "1;33" "▶ Installing Python libraries from requirements.txt..."
-
-# Check if pip supports --break-system-packages
-if pip3 install --help | grep -q -- --break-system-packages; then
-  # If it exists, use it
-  print_color "1;37" "    -> Detected modern pip, using --break-system-packages flag."
-  pip3 install -r "${INSTALL_DIR}/${REQUIREMENTS_FILE}" --break-system-packages
-else
-  # If it doesn't exist, install without it
-  print_color "1;37" "    -> Detected older pip, installing without --break-system-packages flag."
-  pip3 install -r "${INSTALL_DIR}/${REQUIREMENTS_FILE}"
-fi
-
+# Use pip's flags to handle conflicts gracefully
+pip3 install -r "${INSTALL_DIR}/${REQUIREMENTS_FILE}" --break-system-packages || \
+pip3 install -r "${INSTALL_DIR}/${REQUIREMENTS_FILE}" --ignore-installed
 print_color "1;32" "✔ Python libraries installed."
 echo
 
