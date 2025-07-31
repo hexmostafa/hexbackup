@@ -26,5 +26,6 @@
 
 ```bash
 sudo bash -c "$(curl -sSL [https://raw.githubusercontent.com/HEXMOSTAFA/hexbackup/main/installer.sh](https://raw.githubusercontent.com/HEXMOSTAFA/hexbackup/main/installer.sh))"
+```bash
 
 پس از اتمام نصب، تنها یک دستور برای راه‌اندازی پنل و پیکربندی ربات لازم دارید:
