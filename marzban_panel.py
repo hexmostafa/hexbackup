@@ -164,36 +164,45 @@ def setup_bot_flow():
     console.print(Panel("Telegram Bot Setup", style="info"))
     console.print("This process will configure your Telegram bot and run it as a background service.")
     
-    # Step 1: Get only the necessary credentials (Bot + Database if it exists)
-    # This will NOT ask for the backup interval.
+    # Step 1: Get only the necessary credentials
     get_config(ask_telegram=True, ask_database=True)
     
-    log_message("Configuration information has been saved successfully.", "success")
+    log_message("Configuration information saved successfully.", "success")
 
     # Step 2: Enable and start the bot's systemd service
     try:
-        console.print() # Add a space for better formatting
+        console.print()
         with console.status("[bold green]Activating Telegram bot service...[/bold green]"):
-            # Check if the service is already running
+            # Check if the service is already active
             is_active = subprocess.run(['systemctl', 'is-active', '--quiet', 'marzban_bot.service']).returncode == 0
             
+            # Restart if active, otherwise enable and start
             if is_active:
                 log_message("Bot service is already running. Restarting to apply new settings...", "info")
-                subprocess.run(['systemctl', 'restart', 'marzban_bot.service'], check=True, capture_output=True)
+                subprocess.run(['systemctl', 'restart', 'marzban_bot.service'], check=True, capture_output=True, text=True)
             else:
                 log_message("Bot service is not active. Enabling and starting it now...", "info")
-                # The '--now' flag enables and starts the service in one command
-                subprocess.run(['systemctl', 'enable', '--now', 'marzban_bot.service'], check=True, capture_output=True)
+                # Use '--now' to enable and start the service in one command
+                subprocess.run(['systemctl', 'enable', '--now', 'marzban_bot.service'], check=True, capture_output=True, text=True)
         
-        console.print("[bold green]✅ Telegram bot service is now running in the background.[/bold green]")
-        log_message("Systemd service for the bot was started successfully.", "success")
+        # Verify the status after attempting to start/restart
+        sleep(2) # Give it a moment to stabilize
+        result = subprocess.run(['systemctl', 'status', 'marzban_bot.service'], capture_output=True, text=True)
+        
+        if "active (running)" in result.stdout:
+            console.print("[bold green]✅ Telegram bot service is now running in the background.[/bold green]")
+            log_message("Systemd service for the bot was started successfully.", "success")
+        else:
+            console.print("[bold red]❌ The bot service failed to stay running. Please check the logs.[/bold red]")
+            # Show the detailed status output for easier debugging
+            console.print(Panel(result.stderr or result.stdout, title="[danger]Systemctl Status Output[/danger]"))
+            logger.error(f"Failed to keep the bot service running. Status output:\n{result.stdout}\n{result.stderr}")
+
     except subprocess.CalledProcessError as e:
-        # This block runs if systemctl commands fail
-        error_details = e.stderr.decode().strip()
-        console.print(f"[bold red]❌ Failed to start the bot service. Error: {error_details}[/bold red]")
-        logger.error(f"Failed to start/enable systemd service: {error_details}")
+        error_details = e.stderr.strip()
+        console.print(f"[bold red]❌ Failed to execute systemctl command: {error_details}[/bold red]")
+        logger.error(f"Failed to manage systemd service with systemctl: {error_details}")
     except Exception as e:
-        # This block catches other potential errors
         console.print(f"[bold red]❌ An unexpected error occurred while managing the service: {e}[/bold red]")
         logger.error(f"Failed to manage systemd service: {e}", exc_info=True)
         
