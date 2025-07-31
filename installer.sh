@@ -14,7 +14,6 @@ BOT_SCRIPT_NAME="marzban_bot.py"
 REQUIREMENTS_FILE="requirements.txt"
 SERVICE_NAME="marzban_bot.service"
 LAUNCHER_NAME="hexbackup-panel"
-VENV_DIR="venv"
 
 # --- Functions ---
 print_color() {
@@ -38,9 +37,9 @@ print_color "1;32" " HexBackup | Marzban Backup Tool Installer  "
 print_color "1;34" "============================================"
 echo
 
-print_color "1;33" "▶ Installing dependencies (python3, pip, curl, venv)..."
+print_color "1;33" "▶ Installing dependencies (python3, pip, curl)..."
 apt-get update > /dev/null 2>&1
-apt-get install -y python3 python3-pip python3-venv curl > /dev/null 2>&1
+apt-get install -y python3 python3-pip curl > /dev/null 2>&1
 print_color "1;32" "✔ Dependencies installed."
 echo
 
@@ -57,16 +56,14 @@ chmod +x "${INSTALL_DIR}"/*.py
 print_color "1;32" "✔ Scripts downloaded."
 echo
 
-print_color "1;33" "▶ Setting up Python virtual environment..."
-python3 -m venv "${INSTALL_DIR}/${VENV_DIR}"
-source "${INSTALL_DIR}/${VENV_DIR}/bin/activate"
-
+# --- CHANGE: Installing libraries directly to the system ---
 print_color "1;33" "▶ Installing Python libraries from requirements.txt..."
-pip install -r "${INSTALL_DIR}/${REQUIREMENTS_FILE}"
-deactivate
-print_color "1;32" "✔ Python libraries installed in virtual environment."
+# We use `pip3` to ensure it's the right version and pass the `--break-system-packages` flag for modern Debian/Ubuntu
+pip3 install -r "${INSTALL_DIR}/${REQUIREMENTS_FILE}" --break-system-packages
+print_color "1;32" "✔ Python libraries installed."
 echo
 
+# --- Creating systemd service for the Telegram bot ---
 print_color "1;33" "▶ Creating systemd service for the Telegram bot..."
 cat << EOF > "/etc/systemd/system/${SERVICE_NAME}"
 [Unit]
@@ -76,7 +73,7 @@ After=network.target
 [Service]
 User=root
 WorkingDirectory=${INSTALL_DIR}
-ExecStart=${INSTALL_DIR}/${VENV_DIR}/bin/python3 ${INSTALL_DIR}/${BOT_SCRIPT_NAME}
+ExecStart=/usr/bin/python3 ${INSTALL_DIR}/${BOT_SCRIPT_NAME}
 Restart=always
 RestartSec=10
 
@@ -87,11 +84,9 @@ systemctl daemon-reload
 print_color "1;32" "✔ Bot service created."
 echo
 
+# --- Creating launcher command ---
 print_color "1;33" "▶ Creating launcher command '${LAUNCHER_NAME}'..."
-cat << EOF > "/usr/local/bin/${LAUNCHER_NAME}"
-#!/bin/bash
-"${INSTALL_DIR}/${VENV_DIR}/bin/python3" "${INSTALL_DIR}/${PANEL_SCRIPT_NAME}" "\$@"
-EOF
+ln -sf "${INSTALL_DIR}/${PANEL_SCRIPT_NAME}" "/usr/local/bin/${LAUNCHER_NAME}"
 chmod +x "/usr/local/bin/${LAUNCHER_NAME}"
 print_color "1;32" "✔ Launcher created."
 echo
