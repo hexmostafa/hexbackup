@@ -11,14 +11,12 @@ INSTALL_DIR="/opt/hexbackup"
 PANEL_SCRIPT_NAME="marzban_panel.py"
 BOT_SCRIPT_NAME="marzban_bot.py"
 REQUIREMENTS_FILE="requirements.txt"
-SERVICE_NAME="marzban_bot.service"
 LAUNCHER_NAME="hexbackup-panel"
 
 # --- Functions ---
 print_color() {
     COLOR=$1
     TEXT=$2
-    # Check if stdout is a terminal
     if [ -t 1 ]; then
         echo -e "\e[${COLOR}m${TEXT}\e[0m"
     else
@@ -34,14 +32,11 @@ check_root() {
 }
 
 detect_package_manager() {
-    if command -v apt-get &> /dev/null; then
-        echo "apt-get"
-    elif command -v yum &> /dev/null; then
-        echo "yum"
-    elif command -v dnf &> /dev/null; then
-        echo "dnf"
+    if command -v apt-get &> /dev/null; then echo "apt-get";
+    elif command -v yum &> /dev/null; then echo "yum";
+    elif command -v dnf &> /dev/null; then echo "dnf";
     else
-        print_color "1;31" "Unsupported operating system. Please install Python 3 and Pip manually."
+        print_color "1;31" "Unsupported OS. Please install Python 3, Pip, and Curl manually."
         exit 1
     fi
 }
@@ -54,11 +49,8 @@ install_dependencies() {
             apt-get update > /dev/null 2>&1
             apt-get install -y python3 python3-pip curl > /dev/null 2>&1
             ;;
-        "yum")
-            yum install -y python3 python3-pip curl > /dev/null 2>&1
-            ;;
-        "dnf")
-            dnf install -y python3 python3-pip curl > /dev/null 2>&1
+        *) # For yum and dnf
+            $pm install -y python3 python3-pip curl > /dev/null 2>&1
             ;;
     esac
     print_color "1;32" "✔ Dependencies installed successfully."
@@ -84,7 +76,7 @@ mkdir -p "$INSTALL_DIR"
 print_color "1;32" "✔ Directory created."
 echo
 
-print_color "1;33" "▶ Downloading scripts from GitHub..."
+print_color "1;33" "▶ Downloading scripts from GitHub to ${INSTALL_DIR}..."
 curl -sSL -o "${INSTALL_DIR}/${PANEL_SCRIPT_NAME}" "$(get_file_url ${PANEL_SCRIPT_NAME})"
 curl -sSL -o "${INSTALL_DIR}/${BOT_SCRIPT_NAME}" "$(get_file_url ${BOT_SCRIPT_NAME})"
 curl -sSL -o "${INSTALL_DIR}/${REQUIREMENTS_FILE}" "$(get_file_url ${REQUIREMENTS_FILE})"
@@ -93,33 +85,9 @@ print_color "1;32" "✔ Scripts downloaded."
 echo
 
 print_color "1;33" "▶ Installing Python libraries from requirements.txt..."
-# This is a more robust way to install pip packages on modern systems
 python3 -m pip install --upgrade pip > /dev/null 2>&1
 python3 -m pip install -r "${INSTALL_DIR}/${REQUIREMENTS_FILE}"
 print_color "1;32" "✔ Python libraries installed."
-echo
-
-print_color "1;33" "▶ Creating systemd service for the Telegram bot..."
-cat << EOF > "/etc/systemd/system/${SERVICE_NAME}"
-[Unit]
-Description=HexBackup Telegram Bot for Marzban
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=${INSTALL_DIR}
-# The bot will only start if config.json exists
-ExecStartPre=/bin/bash -c 'while [ ! -f ${INSTALL_DIR}/config.json ]; do sleep 2; done'
-ExecStart=/usr/bin/python3 ${INSTALL_DIR}/${BOT_SCRIPT_NAME}
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl daemon-reload
-print_color "1;32" "✔ Bot service created. (Note: The service will not run until initial configuration is done)"
 echo
 
 print_color "1;33" "▶ Creating launcher command '${LAUNCHER_NAME}'..."
@@ -129,7 +97,7 @@ print_color "1;32" "✔ Launcher command created."
 echo
 
 print_color "1;34" "============================================"
-print_color "1;32" "✅ Installation Complete!"
-print_color "1;37" "To start and perform the initial setup, run the following command:"
+print_color "1;32" "✅ Environment setup is complete!"
+print_color "1;37" "To configure the application, run the panel using:"
 print_color "1;36" "sudo ${LAUNCHER_NAME}"
 print_color "1;34" "============================================"
