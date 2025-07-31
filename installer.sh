@@ -28,7 +28,7 @@ print_color() {
 
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
-        print_color "1;31" "خطا: این اسکریپت باید با دسترسی root اجرا شود. لطفاً از 'sudo' استفاده کنید."
+        print_color "1;31" "Error: This script must be run as root. Please use 'sudo'."
         exit 1
     fi
 }
@@ -41,14 +41,14 @@ detect_package_manager() {
     elif command -v dnf &> /dev/null; then
         echo "dnf"
     else
-        print_color "1;31" "سیستم عامل شما پشتیبانی نمی‌شود. لطفاً Python 3 و Pip را به صورت دستی نصب کنید."
+        print_color "1;31" "Unsupported operating system. Please install Python 3 and Pip manually."
         exit 1
     fi
 }
 
 install_dependencies() {
     local pm=$(detect_package_manager)
-    print_color "1;33" "▶ در حال نصب نیازمندی‌های سیستم (python3, pip, curl) با استفاده از ${pm}..."
+    print_color "1;33" "▶ Installing system dependencies (python3, pip, curl) using ${pm}..."
     case "$pm" in
         "apt-get")
             apt-get update > /dev/null 2>&1
@@ -61,7 +61,7 @@ install_dependencies() {
             dnf install -y python3 python3-pip curl > /dev/null 2>&1
             ;;
     esac
-    print_color "1;32" "✔ نیازمندی‌ها با موفقیت نصب شدند."
+    print_color "1;32" "✔ Dependencies installed successfully."
 }
 
 get_file_url() {
@@ -72,34 +72,34 @@ get_file_url() {
 check_root
 
 print_color "1;34" "============================================"
-print_color "1;32" "  HexBackup | نصاب ابزار پشتیبان‌گیری مرزبان  "
+print_color "1;32" "  HexBackup | Marzban Backup Tool Installer "
 print_color "1;34" "============================================"
 echo
 
 install_dependencies
 echo
 
-print_color "1;33" "▶ در حال ایجاد دایرکتوری نصب در ${INSTALL_DIR}..."
+print_color "1;33" "▶ Creating installation directory at ${INSTALL_DIR}..."
 mkdir -p "$INSTALL_DIR"
-print_color "1;32" "✔ دایرکتوری ایجاد شد."
+print_color "1;32" "✔ Directory created."
 echo
 
-print_color "1;33" "▶ در حال دانلود اسکریپت‌ها از گیت‌هاب..."
+print_color "1;33" "▶ Downloading scripts from GitHub..."
 curl -sSL -o "${INSTALL_DIR}/${PANEL_SCRIPT_NAME}" "$(get_file_url ${PANEL_SCRIPT_NAME})"
 curl -sSL -o "${INSTALL_DIR}/${BOT_SCRIPT_NAME}" "$(get_file_url ${BOT_SCRIPT_NAME})"
 curl -sSL -o "${INSTALL_DIR}/${REQUIREMENTS_FILE}" "$(get_file_url ${REQUIREMENTS_FILE})"
 chmod +x "${INSTALL_DIR}"/*.py
-print_color "1;32" "✔ اسکریپت‌ها دانلود شدند."
+print_color "1;32" "✔ Scripts downloaded."
 echo
 
-print_color "1;33" "▶ در حال نصب کتابخانه‌های پایتون از requirements.txt..."
+print_color "1;33" "▶ Installing Python libraries from requirements.txt..."
 # This is a more robust way to install pip packages on modern systems
 python3 -m pip install --upgrade pip > /dev/null 2>&1
 python3 -m pip install -r "${INSTALL_DIR}/${REQUIREMENTS_FILE}"
-print_color "1;32" "✔ کتابخانه‌های پایتون نصب شدند."
+print_color "1;32" "✔ Python libraries installed."
 echo
 
-print_color "1;33" "▶ در حال ایجاد سرویس systemd برای ربات تلگرام..."
+print_color "1;33" "▶ Creating systemd service for the Telegram bot..."
 cat << EOF > "/etc/systemd/system/${SERVICE_NAME}"
 [Unit]
 Description=HexBackup Telegram Bot for Marzban
@@ -119,17 +119,17 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-print_color "1;32" "✔ سرویس ربات ایجاد شد. (توجه: سرویس تا زمان کانفیگ اولیه اجرا نخواهد شد)"
+print_color "1;32" "✔ Bot service created. (Note: The service will not run until initial configuration is done)"
 echo
 
-print_color "1;33" "▶ در حال ایجاد دستور اجرای پنل با نام '${LAUNCHER_NAME}'..."
+print_color "1;33" "▶ Creating launcher command '${LAUNCHER_NAME}'..."
 ln -sf "${INSTALL_DIR}/${PANEL_SCRIPT_NAME}" "/usr/local/bin/${LAUNCHER_NAME}"
 chmod +x "/usr/local/bin/${LAUNCHER_NAME}"
-print_color "1;32" "✔ دستور اجرای پنل ایجاد شد."
+print_color "1;32" "✔ Launcher command created."
 echo
 
 print_color "1;34" "============================================"
-print_color "1;32" "✅ نصب با موفقیت انجام شد!"
-print_color "1;37" "برای شروع و انجام تنظیمات اولیه، دستور زیر را اجرا کنید:"
+print_color "1;32" "✅ Installation Complete!"
+print_color "1;37" "To start and perform the initial setup, run the following command:"
 print_color "1;36" "sudo ${LAUNCHER_NAME}"
 print_color "1;34" "============================================"
