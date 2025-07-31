@@ -31,3 +31,14 @@ sudo bash -c "$(curl -sSL https://raw.githubusercontent.com/HEXMOSTAFA/hexbackup
 ```bash
 sudo hexbackup-panel
 ```
+بخش پشتیبانی و مشارکت
+سازنده: @HEXMOSTAFA
+
+نسخه: 4.0 (Unified & Bot-Compatible)
+
+مجوز: این پروژه تحت مجوز AGPL-3.0 منتشر شده است.
+
+مشارکت‌کنندگان: از تمامی عزیزانی که به پیشرفت این پروژه کمک کرده‌اند، صمیمانه سپاسگزاریم.
+
+
+<img src="https://contrib.rocks/image?repo=hexmostafa/hexbackup">
