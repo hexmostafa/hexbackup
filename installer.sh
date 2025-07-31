@@ -2,6 +2,7 @@
 set -e
 
 # --- Configuration ---
+# !!! IMPORTANT: Change this to your GitHub username !!!
 GITHUB_USER="HEXMOSTAFA"
 REPO_NAME="hexbackup"
 BRANCH="main"
@@ -37,7 +38,7 @@ print_color "1;32" " HexBackup | Marzban Backup Tool Installer  "
 print_color "1;34" "============================================"
 echo
 
-print_color "1;33" "▶ Installing dependencies (python3, pip, curl)..."
+print_color "1;33" "▶ Installing dependencies (python3, pip, curl, venv)..."
 apt-get update > /dev/null 2>&1
 apt-get install -y python3 python3-pip python3-venv curl > /dev/null 2>&1
 print_color "1;32" "✔ Dependencies installed."
@@ -59,10 +60,12 @@ echo
 # --- CHANGE: Installing libraries in a virtual environment ---
 print_color "1;33" "▶ Setting up Python virtual environment..."
 python3 -m venv "${INSTALL_DIR}/${VENV_DIR}"
+# Activate the virtual environment. Note: `source` is for interactive shells, but this works in a script.
 source "${INSTALL_DIR}/${VENV_DIR}/bin/activate"
 
 print_color "1;33" "▶ Installing Python libraries from requirements.txt..."
 pip install -r "${INSTALL_DIR}/${REQUIREMENTS_FILE}"
+# Deactivate the virtual environment after installation
 deactivate
 print_color "1;32" "✔ Python libraries installed in virtual environment."
 echo
@@ -92,9 +95,8 @@ echo
 print_color "1;33" "▶ Creating launcher command '${LAUNCHER_NAME}'..."
 cat << EOF > "/usr/local/bin/${LAUNCHER_NAME}"
 #!/bin/bash
-source "${INSTALL_DIR}/${VENV_DIR}/bin/activate"
-python3 "${INSTALL_DIR}/${PANEL_SCRIPT_NAME}" "\$@"
-deactivate
+# Use the python executable from the virtual environment
+"${INSTALL_DIR}/${VENV_DIR}/bin/python3" "${INSTALL_DIR}/${PANEL_SCRIPT_NAME}" "\$@"
 EOF
 chmod +x "/usr/local/bin/${LAUNCHER_NAME}"
 print_color "1;32" "✔ Launcher created."
