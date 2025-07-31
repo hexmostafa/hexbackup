@@ -2,18 +2,18 @@
 set -e
 
 # --- Configuration ---
-# !!! IMPORTANT: Change this to your GitHub username !!!
-GITHUB_USER="HEXMOSTAFA" # <<<<<<<<<<<<<<< نام کاربری گیت‌هاب خود را اینجا وارد کنید
+GITHUB_USER="HEXMOSTAFA"
 REPO_NAME="hexbackup"
 BRANCH="main"
 
 # --- Variables ---
-INSTALL_DIR="/opt/hexbackup" # پوشه‌ای که در سرور کاربر ساخته می‌شود
+INSTALL_DIR="/opt/hexbackup"
 PANEL_SCRIPT_NAME="marzban_panel.py"
 BOT_SCRIPT_NAME="marzban_bot.py"
 REQUIREMENTS_FILE="requirements.txt"
 SERVICE_NAME="marzban_bot.service"
-LAUNCHER_NAME="hexbackup-panel" # نام دستور نهایی برای اجرای پنل
+LAUNCHER_NAME="hexbackup-panel"
+VENV_DIR="venv"
 
 # --- Functions ---
 print_color() {
@@ -56,11 +56,18 @@ chmod +x "${INSTALL_DIR}"/*.py
 print_color "1;32" "✔ Scripts downloaded."
 echo
 
-print_color "1;33" "▶ Installing Python libraries..."
-pip3 install -r "${INSTALL_DIR}/${REQUIREMENTS_FILE}"
-print_color "1;32" "✔ Python libraries installed."
+# --- CHANGE: Installing libraries in a virtual environment ---
+print_color "1;33" "▶ Setting up Python virtual environment..."
+python3 -m venv "${INSTALL_DIR}/${VENV_DIR}"
+source "${INSTALL_DIR}/${VENV_DIR}/bin/activate"
+
+print_color "1;33" "▶ Installing Python libraries from requirements.txt..."
+pip install -r "${INSTALL_DIR}/${REQUIREMENTS_FILE}"
+deactivate
+print_color "1;32" "✔ Python libraries installed in virtual environment."
 echo
 
+# --- Creating systemd service (updated ExecStart to use venv) ---
 print_color "1;33" "▶ Creating systemd service for the Telegram bot..."
 cat << EOF > "/etc/systemd/system/${SERVICE_NAME}"
 [Unit]
@@ -70,7 +77,7 @@ After=network.target
 [Service]
 User=root
 WorkingDirectory=${INSTALL_DIR}
-ExecStart=/usr/bin/python3 ${INSTALL_DIR}/${BOT_SCRIPT_NAME}
+ExecStart=${INSTALL_DIR}/${VENV_DIR}/bin/python3 ${INSTALL_DIR}/${BOT_SCRIPT_NAME}
 Restart=always
 RestartSec=10
 
@@ -81,8 +88,15 @@ systemctl daemon-reload
 print_color "1;32" "✔ Bot service created."
 echo
 
+# --- Creating launcher command (updated to use venv) ---
 print_color "1;33" "▶ Creating launcher command '${LAUNCHER_NAME}'..."
-ln -sf "${INSTALL_DIR}/${PANEL_SCRIPT_NAME}" "/usr/local/bin/${LAUNCHER_NAME}"
+cat << EOF > "/usr/local/bin/${LAUNCHER_NAME}"
+#!/bin/bash
+source "${INSTALL_DIR}/${VENV_DIR}/bin/activate"
+python3 "${INSTALL_DIR}/${PANEL_SCRIPT_NAME}" "\$@"
+deactivate
+EOF
+chmod +x "/usr/local/bin/${LAUNCHER_NAME}"
 print_color "1;32" "✔ Launcher created."
 echo
 
