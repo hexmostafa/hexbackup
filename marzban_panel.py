@@ -2,7 +2,7 @@
 # =================================================================
 # Marzban Complete Backup & Restore Panel
 # Creator: @HEXMOSTAFA
-# Version: 4.0 (Unified & Bot-Compatible)
+# Version: 4.1 (Fixes for filesystem duplication)
 #
 # A single, robust script for both interactive management
 # and automated/bot-driven backups & restores.
@@ -21,6 +21,7 @@ import tempfile
 import zipfile
 import logging
 from logging.handlers import RotatingFileHandler
+import traceback
 
 # --- Third-party Library Check ---
 try:
@@ -34,11 +35,11 @@ except ImportError:
     sys.exit(1)
 
 # --- Global Configuration ---
-# کد اصلاح‌شده (صحیح)
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 CONTAINER_NAME = "marzban-mysql-1"  # Default container name
-FILES_TO_BACKUP = ["/var/lib/marzban", "/opt/marzban"]
+# Correctly define paths for backup to avoid duplication
+FILES_TO_BACKUP = ["/var/lib/marzban", "/opt/marzban"] 
 EXCLUDED_DATABASES = ['information_schema', 'mysql', 'performance_schema', 'sys']
 CRON_JOB_IDENTIFIER = "# HEXMOSTAFA_MARZBAN_BACKUP_JOB"
 MARZBAN_SERVICE_PATH = "/opt/marzban"
@@ -73,7 +74,7 @@ console = Console(theme=custom_theme)
 
 def show_header():
     console.clear()
-    header_text = Text("Marzban Complete Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 4.0", justify="center", style="header")
+    header_text = Text("Marzban Complete Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 4.1", justify="center", style="header")
     console.print(Panel(header_text, style="blue", border_style="info"))
     console.print()
 
@@ -153,23 +154,9 @@ def get_config(ask_telegram=False, ask_database=False, ask_interval=False):
         
     return config
 
-import os
-import sys
-import subprocess
-from time import sleep
-from rich.panel import Panel
-
-# Make sure these are defined at the top of your marzban_panel.py file
-# from rich.console import Console
-# console = Console()
-
 def setup_bot_flow():
     """
     A dedicated flow for setting up the Telegram Bot.
-    1. Gets credentials from the user.
-    2. Dynamically creates the systemd service file.
-    3. Enables and starts the service.
-    4. Verifies that the service is running correctly.
     """
     show_header()
     console.print(Panel("Telegram Bot Setup", style="info"))
@@ -259,23 +246,20 @@ def find_database_container():
     """Find the MySQL/MariaDB container for Marzban. Returns name or None."""
     log_message("Searching for a Marzban-related database container...", "info")
     try:
-        # This command looks for running containers with mysql or mariadb in their image name
         result = subprocess.run(
             "docker ps --format '{{.Names}} {{.Image}}' | grep -E 'mysql|mariadb'",
             shell=True, check=True, capture_output=True, text=True
         )
         containers = result.stdout.strip().split('\n')
         for container in containers:
-            # We assume the marzban db container has 'marzban' in its name
             if 'marzban' in container.lower():
                 container_name = container.split()[0]
                 log_message(f"Detected database container: {container_name}", "success")
                 return container_name
-        
+            
         log_message("No active Marzban database container found.", "warning")
         return None
     except subprocess.CalledProcessError:
-        # This block runs if the grep command finds nothing and returns an error
         log_message("No active database container found.", "warning")
         return None
 
@@ -370,7 +354,6 @@ def run_full_backup(config, is_cron=False):
         container_name = find_database_container()
         if container_name and config.get('database'):
             log_message("Backing up databases...", "info")
-            # ... (بخش بکاپ دیتابیس بدون تغییر باقی می‌ماند) ...
             db_user = config['database']['user']
             db_pass = config['database']['password']
             list_dbs_cmd = f"docker exec -e MYSQL_PWD='{db_pass}' {container_name} mysql -u {db_user} -e 'SHOW DATABASES;'"
@@ -386,31 +369,48 @@ def run_full_backup(config, is_cron=False):
         else:
             log_message("No database container found or configured. Skipping database backup.", "warning")
 
-        # --- Filesystem Backup with Exclusions ---
+        # --- Filesystem Backup with Exclusions (REFINED LOGIC) ---
         log_message("Backing up configuration files (excluding mysql data and logs)...", "info")
         
         # Define a function that tells shutil which directories to ignore
         def ignore_specific_dirs(directory, contents):
-            # We check if the current directory is /var/lib/marzban
             if os.path.basename(directory) == 'marzban' and 'lib' in directory:
-                return ['mysql', 'logs'] # Ignore these two directories if found
-            return [] # Otherwise, ignore nothing
+                return ['mysql', 'logs'] 
+            return []
 
-        fs_zip_path = os.path.join(backup_temp_dir, "filesystem")
-        os.makedirs(fs_zip_path, exist_ok=True)
-        
+        # This is the improved section to prevent duplication
+        fs_backup_dir = os.path.join(backup_temp_dir, "filesystem")
+        os.makedirs(fs_backup_dir, exist_ok=True)
+
         for file_path in FILES_TO_BACKUP:
-            if os.path.exists(file_path):
-                dest_path = os.path.join(fs_zip_path, file_path.lstrip('/'))
-                if os.path.isdir(file_path):
-                    # Use the ignore function here
-                    shutil.copytree(file_path, dest_path, dirs_exist_ok=True, ignore=ignore_specific_dirs)
-                else:
-                    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-                    shutil.copy2(file_path, dest_path)
-                logger.info(f"Backed up contents of: {file_path}")
+            source_path = file_path
+            
+            # This is the key change: determine the correct destination path
+            # For '/var/lib/marzban', destination is 'filesystem/var/lib/marzban'
+            # For '/opt/marzban', destination is 'filesystem/opt/marzban'
+            # We must be careful about the root directory ('/')
+            
+            # The path manipulation is simplified and more robust
+            if file_path.startswith('/'):
+                relative_path = file_path.lstrip('/')
             else:
-                log_message(f"Path '{file_path}' does not exist. Skipping.", "warning")
+                relative_path = file_path
+            
+            destination_path = os.path.join(fs_backup_dir, relative_path)
+            
+            if os.path.exists(source_path):
+                # Ensure the parent directory for the destination exists
+                os.makedirs(os.path.dirname(destination_path), exist_ok=True)
+                
+                if os.path.isdir(source_path):
+                    shutil.copytree(source_path, destination_path, dirs_exist_ok=True, ignore=ignore_specific_dirs)
+                    logger.info(f"Backed up directory: {source_path}")
+                else:
+                    shutil.copy2(source_path, destination_path)
+                    logger.info(f"Backed up file: {source_path}")
+            else:
+                log_message(f"Path '{source_path}' does not exist. Skipping.", "warning")
+        
         log_message("File backup complete.", "success")
 
         # --- Compression and Upload (remains the same) ---
@@ -436,6 +436,7 @@ def run_full_backup(config, is_cron=False):
 
     except Exception as e:
         log_message(f"A critical error occurred during backup: {str(e)}", "danger")
+        logger.error("Backup failed", exc_info=True)
         raise
     finally:
         log_message("Cleaning up temporary files...", "info")
@@ -533,13 +534,12 @@ def run_restore_process(zip_path, config):
                     if not run_marzban_command("up -d"): raise Exception("Could not start Marzban services.")
                 log_message("Services started for MySQL initialization.", "success")
 
-                # --- CHANGE 1: Wait time reduced to 10 seconds ---
                 log_message("Waiting for MySQL service to stabilize (30 seconds)...", "info")
                 sleep(30)
                 
                 container_name = find_database_container()
                 if not container_name:
-                     raise Exception("Could not find MySQL container after restart.")
+                      raise Exception("Could not find MySQL container after restart.")
                 
                 if not test_database_connection(container_name, config['database']['user'], config['database']['password']):
                     raise Exception("Cannot connect to the new MySQL database. Check logs.")
@@ -554,7 +554,6 @@ def run_restore_process(zip_path, config):
             else:
                 log_message("ℹ️ No MySQL backup data found. Skipping MySQL restore steps.", "info")
 
-            # --- CHANGE 2: Final restart logic replaced for reliability ---
             log_message("Performing final restart to apply all changes...", "info")
             run_marzban_command("down")
             if run_marzban_command("up -d"):
@@ -640,8 +639,6 @@ def setup_cronjob_flow(interactive=True):
     script_path = os.path.abspath(__file__)
     cron_command = f"*/{interval} * * * * {python_executable} {script_path} run-backup"
     
-    # --- This is the key change ---
-    # Only ask for confirmation in interactive mode
     if interactive:
         console.print(Panel(f"The following command will be added to crontab:\n\n[info]{cron_command}[/info]", title="Cronjob Command"))
         if not Confirm.ask("[prompt]Do you authorize this action?[/prompt]"):
@@ -673,14 +670,12 @@ def setup_cronjob_flow(interactive=True):
         print(f"❌ A critical error occurred while updating crontab: {str(e)}")
         return False
 
-
 def main():
     """Main function to dispatch tasks based on arguments or run interactively."""
     # --- NON-INTERACTIVE MODE (for Bot and Cron) ---
     if len(sys.argv) > 1:
         command = sys.argv[1]
-
-        # First, handle the special silent command before any logging.
+        
         if command == 'get-db-type':
             db_type = "Unknown"
             if os.path.exists("/var/lib/marzban/db.sqlite3"):
@@ -696,19 +691,18 @@ def main():
             print(json.dumps({"database_type": db_type}))
             sys.exit(0)
 
-        # NOW, we can log for all OTHER non-interactive commands.
         logger.info(f"Running in Non-Interactive Mode, command: {command}")
-
+        
         config = load_config_file()
         if not config:
             print("❌ Error: config.json not found. Please run the script interactively to create it first.")
             sys.exit(1)
-
+        
         if command in ['run-backup', 'do-backup']:
             try:
                 run_full_backup(config, is_cron=(command == 'run-backup'))
                 sys.exit(0)
-            except Exception as e:
+            except Exception:
                 sys.exit(1)
         
         elif command == 'do-restore':
@@ -717,24 +711,23 @@ def main():
                 sys.exit(1)
             zip_path = sys.argv[2]
             if not os.path.exists(zip_path):
-                 print(f"❌ Error: Restore file not found: {zip_path}")
-                 sys.exit(1)
+                print(f"❌ Error: Restore file not found: {zip_path}")
+                sys.exit(1)
             
             if run_restore_process(zip_path, config):
                 sys.exit(0)
             else:
                 sys.exit(1)
-
+                
         elif command == 'do-auto-backup-setup':
             if setup_cronjob_flow(interactive=False):
                 sys.exit(0)
             else:
                 sys.exit(1)
-        
+                
         else:
             print(f"❌ Error: Unknown non-interactive command '{command}'")
             sys.exit(1)
-
 
     # --- INTERACTIVE MODE (for human users) ---
     if os.geteuid() != 0:
