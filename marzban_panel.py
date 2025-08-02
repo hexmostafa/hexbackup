@@ -2,7 +2,7 @@
 # =================================================================
 # Marzban Complete Backup & Restore Panel
 # Creator: @HEXMOSTAFA
-# Version: 4.2 (Robust filesystem backup logic + Optimizations)
+# Version: 4.3 (Syntax fix and final optimizations)
 #
 # A single, robust script for both interactive management
 # and automated/bot-driven backups & restores.
@@ -38,7 +38,7 @@ except ImportError:
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 # Paths to back up. This structure is critical for the new backup logic.
-FILES_TO_BACKUP = ["/var/lib/marzban", "/opt/marzban"] 
+FILES_TO_BACKUP = ["/var/lib/marzban", "/opt/marzban"]
 EXCLUDED_DATABASES = ['information_schema', 'mysql', 'performance_schema', 'sys']
 CRON_JOB_IDENTIFIER = "# HEXMOSTAFA_MARZBAN_BACKUP_JOB"
 MARZBAN_SERVICE_PATH = "/opt/marzban"
@@ -73,7 +73,7 @@ console = Console(theme=custom_theme, log_path=False)
 
 def show_header():
     console.clear()
-    header_text = Text("Marzban Complete Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 4.2", justify="center", style="header")
+    header_text = Text("Marzban Complete Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 4.3", justify="center", style="header")
     console.print(Panel(header_text, style="blue", border_style="info"))
     console.print()
 
@@ -126,14 +126,14 @@ def get_config(ask_telegram=False, ask_database=False, ask_interval=False):
         else:
             log_message("No database container detected. Skipping database credential setup.", "warning")
             config['database'] = {}
-            
+
     if ask_interval:
         config['telegram'] = config.get('telegram', {})
         config["telegram"]['backup_interval'] = Prompt.ask(
             "[prompt]Enter automatic backup interval in minutes (e.g., 60)[/prompt]",
             default=str(config.get("telegram", {}).get('backup_interval', '60'))
         )
-        
+
     try:
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config, f, indent=4)
@@ -143,7 +143,7 @@ def get_config(ask_telegram=False, ask_database=False, ask_interval=False):
              console.print(f"[success]Settings saved to '{CONFIG_FILE}'. Permissions set to 600 for security.[/success]")
     except Exception as e:
         console.print(f"[danger]Failed to save config file: {str(e)}[/danger]")
-        
+
     return config
 
 def setup_bot_flow():
@@ -272,14 +272,14 @@ def run_full_backup(config, is_cron=False):
             log_message("Backing up MySQL databases...", "info")
             db_user = config['database']['user']
             db_pass = config['database']['password']
-            
+
             db_staging_dir = os.path.join(backup_temp_dir, "database")
             os.makedirs(db_staging_dir, exist_ok=True)
 
             list_dbs_cmd = f"docker exec -e MYSQL_PWD='{db_pass}' {container_name} mysql -u {db_user} -N -e 'SHOW DATABASES;'"
             process = subprocess.run(list_dbs_cmd, shell=True, check=True, capture_output=True, text=True)
             databases = [db for db in process.stdout.strip().split('\n') if db not in EXCLUDED_DATABASES]
-            
+
             for db_name in databases:
                 sql_path = os.path.join(db_staging_dir, f"{db_name}.sql")
                 dump_cmd = (f"docker exec -e MYSQL_PWD='{db_pass}' {container_name} "
@@ -307,11 +307,11 @@ def run_full_backup(config, is_cron=False):
             if not os.path.exists(source_path):
                 log_message(f"Source path '{source_path}' does not exist. Skipping.", "warning")
                 continue
-            
+
             # Destination path inside the staging 'filesystem' directory
             # This maintains the absolute path structure, e.g., /.../filesystem/var/lib/marzban
             destination_path = os.path.join(fs_staging_dir, source_path.lstrip('/'))
-            
+
             log_message(f"Copying '{source_path}' to staging area...", "info")
             if os.path.isdir(source_path):
                 # copytree requires the destination to NOT exist.
@@ -320,7 +320,7 @@ def run_full_backup(config, is_cron=False):
             elif os.path.isfile(source_path):
                 os.makedirs(os.path.dirname(destination_path), exist_ok=True)
                 shutil.copy2(source_path, destination_path)
-        
+
         log_message("File backup stage complete.", "success")
 
         # --- Compression and Upload ---
@@ -352,7 +352,7 @@ def run_full_backup(config, is_cron=False):
         shutil.rmtree(backup_temp_dir, ignore_errors=True)
         if os.path.exists(zip_filename):
             os.remove(zip_filename)
-            
+
 def download_from_telegram(tg_config, timeout=120):
     bot_token, chat_id = tg_config['bot_token'], tg_config['admin_chat_id']
     log_message(f"Please send the .zip backup file to your bot now. Waiting for {timeout} seconds...", "info")
@@ -384,10 +384,10 @@ def download_from_telegram(tg_config, timeout=120):
                                 file_info = requests.get(file_info_url, timeout=10).json()
                                 if not file_info.get('ok'):
                                     raise Exception(f"Failed to get file info: {file_info.get('description')}")
-                                
+
                                 download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_info['result']['file_path']}"
                                 temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip", prefix="tg_backup_")
-                                
+
                                 with requests.get(download_url, stream=True, timeout=300) as r:
                                     r.raise_for_status()
                                     shutil.copyfileobj(r.raw, temp_zip)
@@ -431,19 +431,19 @@ def run_restore_process(zip_path, config):
                 log_message("MySQL backup data found. Proceeding with MySQL restore.", "success")
                 if not config.get('database'):
                     raise ValueError("Backup contains MySQL data, but DB credentials are not configured.")
-                
+
                 log_message("Clearing old MySQL data volume...", "info")
                 mysql_data_dir = "/var/lib/marzban/mysql"
                 if os.path.exists(mysql_data_dir): shutil.rmtree(mysql_data_dir)
                 os.makedirs(mysql_data_dir, exist_ok=True)
-                
+
                 with console.status("[info]Starting services to initialize MySQL...[/info]"):
                     if not run_marzban_command("up -d"):
                         raise RuntimeError("Could not start Marzban services for MySQL initialization.")
-                
+
                 log_message("Waiting 30 seconds for MySQL to stabilize...", "info")
                 sleep(30)
-                
+
                 container_name = find_database_container()
                 if not container_name:
                     raise RuntimeError("Could not find MySQL container after restart.")
@@ -487,19 +487,19 @@ def restore_flow():
     ))
     if not Confirm.ask("[prompt]Do you understand the risks and wish to continue?[/prompt]", default=False):
         log_message("Restore operation cancelled by user.", "info"); return
-    
+
     config = get_config()
     if not config:
         log_message("Configuration file is missing or invalid. Please run Setup first.", "danger"); return
-        
+
     zip_path = None
-    
+
     console.print(Panel(
         "[menu]1[/menu]. Use a local backup file\n[menu]2[/menu]. Download from Telegram bot",
         title="Select Restore Source", border_style="info"
     ))
     choice = Prompt.ask("[prompt]Choose your method[/prompt]", choices=["1", "2"], default="1")
-    
+
     if choice == "1":
         zip_path = Prompt.ask("[prompt]Enter the full path to your .zip backup file[/prompt]")
         if not os.path.exists(zip_path):
@@ -510,7 +510,7 @@ def restore_flow():
         zip_path = download_from_telegram(config['telegram'])
         if not zip_path:
             log_message("Could not get backup from Telegram. Aborting.", "danger"); return
-    
+
     if zip_path and run_restore_process(zip_path, config):
         # If restore was successful and from telegram, clean up the downloaded file
         if choice == "2" and os.path.exists(zip_path):
@@ -530,7 +530,7 @@ def setup_cronjob_flow(interactive=True):
 
     if interactive:
         config = get_config(ask_interval=True)
-        
+
     interval = config.get("telegram", {}).get('backup_interval', '60')
     if not interval or not str(interval).isdigit():
         log_message(f"Invalid backup interval: '{interval}'. Please set a valid number of minutes.", "danger")
@@ -552,18 +552,18 @@ def setup_cronjob_flow(interactive=True):
     # Redirect stdout and stderr to the log file to capture cron output
     log_file_path = os.path.abspath(LOG_FILE)
     cron_command = f"*/{interval} * * * * {python_executable} {script_path} run-backup >> {log_file_path} 2>&1"
-    
+
     if interactive:
         console.print(Panel(f"The following command will be added to the system crontab:\n\n[info]{cron_command}[/info]", title="Cronjob Command"))
         if not Confirm.ask("[prompt]Do you authorize this action?[/prompt]"):
             log_message("Cronjob setup cancelled by user.", "info")
             return False
-            
+
     log_message("Attempting to modify system crontab...", "info")
     try:
         p_read = subprocess.run(['crontab', '-l'], capture_output=True, text=True, check=False)
         current_crontab = p_read.stdout
-        
+
         # Filter out any old versions of this specific job
         new_lines = [line for line in current_crontab.strip().split('\n') if CRON_JOB_IDENTIFIER not in line and line.strip()]
         new_lines.append(f"{cron_command} {CRON_JOB_IDENTIFIER}")
@@ -571,7 +571,7 @@ def setup_cronjob_flow(interactive=True):
 
         p_write = Popen(['crontab', '-'], stdin=PIPE, stdout=PIPE, stderr=PIPE)
         stdout, stderr = p_write.communicate(input=new_crontab_content.encode())
-        
+
         if p_write.returncode == 0:
             log_message("✅ Crontab updated successfully!", "success")
             return True
@@ -588,12 +588,12 @@ def main():
     if len(sys.argv) > 1:
         command = sys.argv[1]
         logger.info(f"Running in Non-Interactive Mode, command: {command}")
-        
+
         config = load_config_file()
         if not config and command not in ['get-db-type']:
             logger.error("Error: config.json not found or invalid. Please run script interactively to create it.")
             sys.exit(1)
-        
+
         try:
             if command in ['run-backup', 'do-backup']:
                 run_full_backup(config, is_cron=(command == 'run-backup'))
@@ -616,7 +616,7 @@ def main():
     if os.geteuid() != 0:
         console.print("[danger]This script requires root privileges. Please run it with 'sudo'.[/danger]")
         sys.exit(1)
-        
+
     while True:
         show_header()
         choice = show_main_menu()
@@ -635,11 +635,11 @@ def main():
         elif choice == "3":
             setup_bot_flow()
         elif choice == "4":
-t            setup_cronjob_flow()
+            setup_cronjob_flow() # CORRECTED LINE
         elif choice == "5":
             log_message("Goodbye!", "info")
             break
-        
+
         Prompt.ask("\n[prompt]Press Enter to return to the main menu...[/prompt]")
 
 if __name__ == "__main__":
