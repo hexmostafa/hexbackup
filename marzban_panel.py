@@ -2,7 +2,7 @@
 # =================================================================
 # Marzban Complete Backup & Restore Panel
 # Creator: @HEXMOSTAFA
-# Version: 4.3 (Syntax fix and final optimizations)
+# Version: 4.4 (Syntax fix, optimization, and deduplication)
 #
 # A single, robust script for both interactive management
 # and automated/bot-driven backups & restores.
@@ -37,7 +37,6 @@ except ImportError:
 # --- Global Configuration ---
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
-# Paths to back up. This structure is critical for the new backup logic.
 FILES_TO_BACKUP = ["/var/lib/marzban", "/opt/marzban"]
 EXCLUDED_DATABASES = ['information_schema', 'mysql', 'performance_schema', 'sys']
 CRON_JOB_IDENTIFIER = "# HEXMOSTAFA_MARZBAN_BACKUP_JOB"
@@ -73,12 +72,11 @@ console = Console(theme=custom_theme, log_path=False)
 
 def show_header():
     console.clear()
-    header_text = Text("Marzban Complete Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 4.3", justify="center", style="header")
+    header_text = Text("Marzban Complete Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 4.4", justify="center", style="header")
     console.print(Panel(header_text, style="blue", border_style="info"))
     console.print()
 
 def show_main_menu():
-    """Displays the main menu."""
     console.print(Panel(
         "[menu]1[/menu]. [bold]Create Full Backup[/bold]\n"
         "[menu]2[/menu]. [bold]Restore from Backup[/bold]\n"
@@ -92,7 +90,6 @@ def show_main_menu():
     return Prompt.ask("[prompt]Enter your choice[/prompt]", choices=["1", "2", "3", "4", "5"], default="5")
 
 def load_config_file():
-    """Loads config from file without interaction."""
     if not os.path.exists(CONFIG_FILE):
         return None
     try:
@@ -103,7 +100,6 @@ def load_config_file():
         return None
 
 def get_config(ask_telegram=False, ask_database=False, ask_interval=False):
-    """Modular function to get specific parts of the configuration and save it securely."""
     config = load_config_file() or {"telegram": {}, "database": {}}
 
     if ask_telegram:
@@ -137,17 +133,15 @@ def get_config(ask_telegram=False, ask_database=False, ask_interval=False):
     try:
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config, f, indent=4)
-        # Set secure permissions for the config file
         os.chmod(CONFIG_FILE, 0o600)
         if any([ask_telegram, ask_database, ask_interval]):
-             console.print(f"[success]Settings saved to '{CONFIG_FILE}'. Permissions set to 600 for security.[/success]")
+            console.print(f"[success]Settings saved to '{CONFIG_FILE}'. Permissions set to 600 for security.[/success]")
     except Exception as e:
         console.print(f"[danger]Failed to save config file: {str(e)}[/danger]")
 
     return config
 
 def setup_bot_flow():
-    """A dedicated flow for setting up the Telegram Bot and its systemd service."""
     show_header()
     console.print(Panel("Telegram Bot Setup", style="info"))
     console.print("This will configure your bot and create a background service to run it permanently.")
@@ -210,25 +204,21 @@ WantedBy=multi-user.target
         log_message(f"An unexpected error occurred during bot setup: {e}", "danger", exc_info=True)
 
 def log_message(message, style="info", **kwargs):
-    """Log a message to console and file."""
     console.print(f"[{style}]{message}[/{style}]", **kwargs)
     logger.info(message)
 
 def find_database_container():
-    """Finds the MySQL/MariaDB container for Marzban."""
     log_message("Searching for Marzban database container...", "info")
     try:
         result = subprocess.run(
             "docker ps --format '{{.Names}} {{.Image}}' | grep -iE 'mysql|mariadb'",
             shell=True, check=True, capture_output=True, text=True
         )
-        # Prefer a container with 'marzban' in its name
         for line in result.stdout.strip().split('\n'):
             if 'marzban' in line.lower():
                 container_name = line.split()[0]
                 log_message(f"Detected Marzban-specific database container: {container_name}", "success")
                 return container_name
-        # Fallback to the first found container if no specific one is found
         first_container = result.stdout.strip().split('\n')[0].split()[0]
         log_message(f"Found a generic database container: {first_container}. Using it as fallback.", "warning")
         return first_container
@@ -237,7 +227,6 @@ def find_database_container():
         return None
 
 def run_marzban_command(action):
-    """Runs a docker compose command for Marzban (up, down, etc.)."""
     if not os.path.isdir(MARZBAN_SERVICE_PATH):
         log_message(f"Marzban directory '{MARZBAN_SERVICE_PATH}' not found. Cannot manage services.", "danger")
         return False
@@ -254,14 +243,18 @@ def run_marzban_command(action):
 # CORE LOGIC: BACKUP, RESTORE, CRONJOB
 # =================================================================
 
+def should_copy_file(src_path, dst_path):
+    """Check if a file should be copied based on modification time and size."""
+    if not os.path.exists(dst_path):
+        return True
+    src_stat = os.stat(src_path)
+    dst_stat = os.stat(dst_path)
+    return src_stat.st_mtime > dst_stat.st_mtime or src_stat.st_size != dst_stat.st_size
+
 def run_full_backup(config, is_cron=False):
-    """
-    Creates a full backup of databases and files using a robust, non-duplicating method.
-    """
     log_message("Starting full backup process...", "info")
     timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     backup_temp_dir = tempfile.mkdtemp(prefix="marzban_backup_")
-    # We create the zip file in a known location like /tmp
     zip_base_name = os.path.join("/tmp", f"marzban_full_backup_{timestamp}")
     zip_filename = f"{zip_base_name}.zip"
 
@@ -289,14 +282,13 @@ def run_full_backup(config, is_cron=False):
         else:
             log_message("No configured database found. Skipping MySQL backup.", "warning")
 
-        # --- Filesystem Backup (ROBUST, NON-DUPLICATING LOGIC) ---
+        # --- Filesystem Backup (Optimized, Non-Duplicating) ---
         log_message("Backing up Marzban configuration files...", "info")
         fs_staging_dir = os.path.join(backup_temp_dir, "filesystem")
-        os.makedirs(fs_staging_dir)
+        os.makedirs(fs_staging_dir, exist_ok=True)
 
         def ignore_patterns(path, names):
             ignored = set()
-            # This logic specifically targets the mysql/logs inside /var/lib/marzban
             if '/var/lib/marzban' in path and os.path.basename(path) == 'marzban':
                 for name in names:
                     if name in ['mysql', 'logs']:
@@ -308,18 +300,25 @@ def run_full_backup(config, is_cron=False):
                 log_message(f"Source path '{source_path}' does not exist. Skipping.", "warning")
                 continue
 
-            # Destination path inside the staging 'filesystem' directory
-            # This maintains the absolute path structure, e.g., /.../filesystem/var/lib/marzban
             destination_path = os.path.join(fs_staging_dir, source_path.lstrip('/'))
+            os.makedirs(os.path.dirname(destination_path), exist_ok=True)
 
             log_message(f"Copying '{source_path}' to staging area...", "info")
             if os.path.isdir(source_path):
-                # copytree requires the destination to NOT exist.
-                # This is the key to preventing duplication.
-                shutil.copytree(source_path, destination_path, ignore=ignore_patterns, symlinks=True)
+                for root, dirs, files in os.walk(source_path):
+                    if ignore_patterns(root, dirs | set(files)):
+                        continue
+                    rel_path = os.path.relpath(root, source_path)
+                    dest_root = os.path.join(destination_path, rel_path) if rel_path != '.' else destination_path
+                    os.makedirs(dest_root, exist_ok=True)
+                    for file in files:
+                        src_file = os.path.join(root, file)
+                        dst_file = os.path.join(dest_root, file)
+                        if should_copy_file(src_file, dst_file):
+                            shutil.copy2(src_file, dst_file)
             elif os.path.isfile(source_path):
-                os.makedirs(os.path.dirname(destination_path), exist_ok=True)
-                shutil.copy2(source_path, destination_path)
+                if should_copy_file(source_path, destination_path):
+                    shutil.copy2(source_path, destination_path)
 
         log_message("File backup stage complete.", "success")
 
@@ -339,13 +338,12 @@ def run_full_backup(config, is_cron=False):
                 files={'document': f},
                 timeout=300
             )
-        response.raise_for_status() # Raise an exception for HTTP errors
+        response.raise_for_status()
         log_message("Backup successfully sent to Telegram!", "success")
 
     except Exception as e:
         log_message(f"A critical error occurred during backup: {str(e)}", "danger")
         logger.error("Backup failed", exc_info=True)
-        # Re-raise to be caught by higher-level handlers if necessary
         raise
     finally:
         log_message("Cleaning up temporary files...", "info")
@@ -358,13 +356,12 @@ def download_from_telegram(tg_config, timeout=120):
     log_message(f"Please send the .zip backup file to your bot now. Waiting for {timeout} seconds...", "info")
     offset = 0
     try:
-        # Get the latest update_id to start polling from there
         url = f"https://api.telegram.org/bot{bot_token}/getUpdates?offset=-1"
         response = requests.get(url, timeout=10).json()
         if response.get('ok') and response.get('result'):
             offset = response['result'][0]['update_id'] + 1
     except requests.RequestException:
-        pass # Ignore if we can't get the initial offset
+        pass
 
     start_time = time()
     while time() - start_time < timeout:
@@ -387,14 +384,13 @@ def download_from_telegram(tg_config, timeout=120):
 
                                 download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_info['result']['file_path']}"
                                 temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip", prefix="tg_backup_")
-
                                 with requests.get(download_url, stream=True, timeout=300) as r:
                                     r.raise_for_status()
                                     shutil.copyfileobj(r.raw, temp_zip)
-                                temp_zip.close() # Close file handle to ensure it's written
+                                temp_zip.close()
                                 log_message(f"File downloaded to: {temp_zip.name}", "success")
                                 return temp_zip.name
-            sleep(2) # Short sleep between polls
+            sleep(2)
         except requests.RequestException as e:
             log_message(f"Network error while polling Telegram: {e}. Retrying...", "warning")
             sleep(5)
@@ -403,7 +399,6 @@ def download_from_telegram(tg_config, timeout=120):
     return None
 
 def run_restore_process(zip_path, config):
-    """The core, non-interactive restore logic."""
     with tempfile.TemporaryDirectory(prefix="marzban_restore_") as temp_dir:
         try:
             log_message(f"Starting restore from: {os.path.basename(zip_path)}", "info")
@@ -421,8 +416,6 @@ def run_restore_process(zip_path, config):
 
             fs_restore_path = os.path.join(temp_dir, "filesystem")
             log_message("Restoring files and directories...", "info")
-            # Using copytree to restore, which handles permissions and directories correctly.
-            # We restore to the root directory '/'.
             shutil.copytree(fs_restore_path, "/", dirs_exist_ok=True)
             log_message("Filesystem restore complete.", "success")
 
@@ -461,7 +454,7 @@ def run_restore_process(zip_path, config):
                 log_message("No MySQL data found in backup. Skipping MySQL restore.", "info")
 
             log_message("Performing final restart to apply all changes...", "info")
-            run_marzban_command("down") # Ensure clean state before final start
+            run_marzban_command("down")
             if run_marzban_command("up -d"):
                 log_message("Marzban services restarted successfully.", "success")
             else:
@@ -478,7 +471,6 @@ def run_restore_process(zip_path, config):
             return False
 
 def restore_flow():
-    """Interactive restore flow for the CLI menu."""
     show_header()
     console.print(Panel(
         "[bold]This is a highly destructive operation.[/bold]\nIt will [danger]STOP[/danger] services, "
@@ -486,14 +478,15 @@ def restore_flow():
         title="[warning]CRITICAL WARNING[/warning]", border_style="danger"
     ))
     if not Confirm.ask("[prompt]Do you understand the risks and wish to continue?[/prompt]", default=False):
-        log_message("Restore operation cancelled by user.", "info"); return
+        log_message("Restore operation cancelled by user.", "info")
+        return
 
     config = get_config()
     if not config:
-        log_message("Configuration file is missing or invalid. Please run Setup first.", "danger"); return
+        log_message("Configuration file is missing or invalid. Please run Setup first.", "danger")
+        return
 
     zip_path = None
-
     console.print(Panel(
         "[menu]1[/menu]. Use a local backup file\n[menu]2[/menu]. Download from Telegram bot",
         title="Select Restore Source", border_style="info"
@@ -503,22 +496,23 @@ def restore_flow():
     if choice == "1":
         zip_path = Prompt.ask("[prompt]Enter the full path to your .zip backup file[/prompt]")
         if not os.path.exists(zip_path):
-            log_message(f"File not found: '{zip_path}'. Aborting.", "danger"); return
+            log_message(f"File not found: '{zip_path}'. Aborting.", "danger")
+            return
     elif choice == "2":
         if not config.get('telegram', {}).get('bot_token'):
-            log_message("Telegram is not configured. Please use Option 3 in the main menu first.", "danger"); return
+            log_message("Telegram is not configured. Please use Option 3 in the main menu first.", "danger")
+            return
         zip_path = download_from_telegram(config['telegram'])
         if not zip_path:
-            log_message("Could not get backup from Telegram. Aborting.", "danger"); return
+            log_message("Could not get backup from Telegram. Aborting.", "danger")
+            return
 
     if zip_path and run_restore_process(zip_path, config):
-        # If restore was successful and from telegram, clean up the downloaded file
         if choice == "2" and os.path.exists(zip_path):
             os.remove(zip_path)
             log_message(f"Cleaned up temporary download: {os.path.basename(zip_path)}", "info")
 
 def setup_cronjob_flow(interactive=True):
-    """Setup or update the automatic backup cronjob."""
     if interactive:
         show_header()
         console.print(Panel("Automatic Backup Setup (Cronjob)", style="info"))
@@ -549,7 +543,6 @@ def setup_cronjob_flow(interactive=True):
 
     python_executable = sys.executable
     script_path = os.path.abspath(__file__)
-    # Redirect stdout and stderr to the log file to capture cron output
     log_file_path = os.path.abspath(LOG_FILE)
     cron_command = f"*/{interval} * * * * {python_executable} {script_path} run-backup >> {log_file_path} 2>&1"
 
@@ -563,8 +556,6 @@ def setup_cronjob_flow(interactive=True):
     try:
         p_read = subprocess.run(['crontab', '-l'], capture_output=True, text=True, check=False)
         current_crontab = p_read.stdout
-
-        # Filter out any old versions of this specific job
         new_lines = [line for line in current_crontab.strip().split('\n') if CRON_JOB_IDENTIFIER not in line and line.strip()]
         new_lines.append(f"{cron_command} {CRON_JOB_IDENTIFIER}")
         new_crontab_content = "\n".join(new_lines) + "\n"
@@ -583,12 +574,9 @@ def setup_cronjob_flow(interactive=True):
         return False
 
 def main():
-    """Main function to dispatch tasks based on CLI arguments or run interactively."""
-    # --- NON-INTERACTIVE MODE (for Bot and Cron) ---
     if len(sys.argv) > 1:
         command = sys.argv[1]
         logger.info(f"Running in Non-Interactive Mode, command: {command}")
-
         config = load_config_file()
         if not config and command not in ['get-db-type']:
             logger.error("Error: config.json not found or invalid. Please run script interactively to create it.")
@@ -603,7 +591,8 @@ def main():
                     sys.exit(1)
                 run_restore_process(sys.argv[2], config)
             elif command == 'do-auto-backup-setup':
-                if not setup_cronjob_flow(interactive=False): sys.exit(1)
+                if not setup_cronjob_flow(interactive=False):
+                    sys.exit(1)
             else:
                 logger.error(f"Error: Unknown non-interactive command '{command}'")
                 sys.exit(1)
@@ -612,7 +601,6 @@ def main():
             logger.error(f"Non-interactive command '{command}' failed: {e}", exc_info=True)
             sys.exit(1)
 
-    # --- INTERACTIVE MODE (for human users) ---
     if os.geteuid() != 0:
         console.print("[danger]This script requires root privileges. Please run it with 'sudo'.[/danger]")
         sys.exit(1)
@@ -629,17 +617,15 @@ def main():
                 run_full_backup(config)
             except Exception:
                 log_message("Backup process failed. Check logs for details.", "danger")
-
         elif choice == "2":
             restore_flow()
         elif choice == "3":
             setup_bot_flow()
         elif choice == "4":
-            setup_cronjob_flow() # CORRECTED LINE
+            setup_cronjob_flow()
         elif choice == "5":
             log_message("Goodbye!", "info")
             break
-
         Prompt.ask("\n[prompt]Press Enter to return to the main menu...[/prompt]")
 
 if __name__ == "__main__":
