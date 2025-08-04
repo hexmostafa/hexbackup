@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # =================================================================
-# Marzban Professional Control Bot - UI/UX Focused Edition
+# Marzban Professional Control Bot - On/Off Toggle Edition
 # Creator: @HEXMOSTAFA
-# Version: 5.0.0 (Phoenix)
+# Version: 5.1.0 (Phoenix+)
 #
-# A complete redesign focusing on a professional, intuitive,
-# and safe user experience.
+# Features a dedicated On/Off toggle for Auto-Backup for a
+# superior and more intuitive user experience.
 # =================================================================
 import os
 import json
@@ -13,7 +13,7 @@ import subprocess
 import logging
 import time
 from datetime import datetime
-from typing import Tuple, List, Optional
+from typing import Tuple, List
 
 try:
     import telebot
@@ -27,21 +27,20 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 MAIN_PANEL_SCRIPT = os.path.join(SCRIPT_DIR, "marzban_panel.py")
 LOG_FILE = os.path.join(SCRIPT_DIR, "marzban_bot.log")
-# A state file to keep track of bot's operational data like last backup time
 BOT_STATE_FILE = os.path.join(SCRIPT_DIR, "bot_state.json")
 
 EMOJI = {
     "PANEL": "📱", "BACKUP": "📦", "RESTORE": "🔄", "SETTINGS": "⚙️",
     "SUCCESS": "✅", "ERROR": "❌", "WAIT": "⏳", "INFO": "ℹ️",
     "WARNING": "⚠️", "BACK": "⬅️", "DANGER": "🛑", "EDIT": "📝",
-    "CLOCK": "⏱️", "WELCOME": "👋", "STATUS": "📊", "CONFIRM": "👍"
+    "CLOCK": "⏱️", "WELCOME": "👋", "STATUS": "📊", "CONFIRM": "👍",
+    "TOGGLE_ON": "🟢", "TOGGLE_OFF": "🔴"
 }
 
-# --- Logging Setup ---
+# --- Logging & Config/State Loading ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', handlers=[logging.FileHandler(LOG_FILE, encoding='utf-8'), logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
-# --- Load Configuration & State ---
 try:
     with open(CONFIG_FILE, 'r') as f: config = json.load(f)
     BOT_TOKEN = config.get('telegram', {}).get('bot_token')
@@ -55,23 +54,17 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode="Markdown")
 user_states = {}
 
 def update_bot_state(key: str, value: any):
-    """Updates and saves the bot's state (e.g., last backup time)."""
-    state = {}
-    if os.path.exists(BOT_STATE_FILE):
-        with open(BOT_STATE_FILE, 'r') as f:
-            try: state = json.load(f)
-            except json.JSONDecodeError: pass
+    state = get_bot_state()
     state[key] = value
-    with open(BOT_STATE_FILE, 'w') as f:
-        json.dump(state, f, indent=4)
+    with open(BOT_STATE_FILE, 'w') as f: json.dump(state, f, indent=4)
 
 def get_bot_state() -> dict:
     if not os.path.exists(BOT_STATE_FILE): return {}
-    with open(BOT_STATE_FILE, 'r') as f:
-        try: return json.load(f)
-        except json.JSONDecodeError: return {}
+    try:
+        with open(BOT_STATE_FILE, 'r') as f: return json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError): return {}
 
-# --- Helper Functions --- (Mostly Unchanged)
+# --- Helper Functions ---
 def run_main_script(args: List[str]) -> Tuple[bool, str, str]:
     python_executable = subprocess.run(['which', 'python3'], capture_output=True, text=True).stdout.strip() or "python3"
     command = ['sudo', python_executable, MAIN_PANEL_SCRIPT] + args
@@ -84,17 +77,13 @@ def run_main_script(args: List[str]) -> Tuple[bool, str, str]:
         else:
             error_details = (result.stderr.strip() or "No stderr") + "\n" + (result.stdout.strip() or "No stdout")
             return False, error_details.strip(), duration
-    except subprocess.TimeoutExpired:
-        return False, "Critical Error: Operation timed out after 20 minutes.", f"{time.time() - start_time:.2f}"
     except Exception as e:
         return False, f"A critical Python error occurred: {e}", f"{time.time() - start_time:.2f}"
 
 def admin_only(func):
     def wrapper(message_or_call):
         chat_id = message_or_call.chat.id if hasattr(message_or_call, 'chat') else message_or_call.message.chat.id
-        if chat_id != ADMIN_CHAT_ID:
-            logger.warning(f"Unauthorized access from chat_id: {chat_id}")
-            return
+        if chat_id != ADMIN_CHAT_ID: return
         return func(message_or_call)
     return wrapper
 
@@ -107,11 +96,19 @@ def main_menu_keyboard():
     )
 
 def settings_menu_keyboard():
-    return InlineKeyboardMarkup(row_width=1).add(
-        InlineKeyboardButton(f"{EMOJI['EDIT']} Change Auto-Backup Interval", callback_data="settings_edit_interval"),
-        InlineKeyboardButton(f"{EMOJI['INFO']} View Full Configuration", callback_data="settings_view_config"),
-        InlineKeyboardButton(f"{EMOJI['BACK']} Back to Main Menu", callback_data="main_menu")
-    )
+    with open(CONFIG_FILE, 'r') as f: current_config = json.load(f)
+    is_enabled = 'backup_interval' in current_config.get('telegram', {})
+    
+    toggle_text = f"{EMOJI['TOGGLE_OFF']} Disable Auto-Backup" if is_enabled else f"{EMOJI['TOGGLE_ON']} Enable Auto-Backup"
+    toggle_action = "settings_autobackup_disable" if is_enabled else "settings_autobackup_enable"
+
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(InlineKeyboardButton(toggle_text, callback_data=toggle_action))
+    if is_enabled:
+        markup.add(InlineKeyboardButton(f"{EMOJI['EDIT']} Change Interval", callback_data="settings_edit_interval"))
+    markup.add(InlineKeyboardButton(f"{EMOJI['INFO']} View Full Configuration", callback_data="settings_view_config"))
+    markup.add(InlineKeyboardButton(f"{EMOJI['BACK']} Back to Main Menu", callback_data="main_menu"))
+    return markup
 
 def restore_confirmation_keyboard():
     return InlineKeyboardMarkup(row_width=1).add(
@@ -119,29 +116,70 @@ def restore_confirmation_keyboard():
         InlineKeyboardButton(f"{EMOJI['BACK']} Cancel & Go Back", callback_data="main_menu")
     )
 
-# --- Message Display Functions ---
-def display_main_menu(message):
+# --- UI Display Functions ---
+def display_main_menu(message_or_call):
     """Displays the main dashboard menu."""
+    chat_id = message_or_call.chat.id if hasattr(message_or_call, 'chat') else message_or_call.message.chat.id
+    message_id = message_or_call.message_id if hasattr(message_or_call, 'message_id') else message_or_call.message.message_id
+    
     bot_state = get_bot_state()
-    last_backup_time = bot_state.get('last_backup_time', 'Never')
-    if last_backup_time != 'Never':
-        last_backup_time = datetime.fromisoformat(last_backup_time).strftime('%Y-%m-%d %H:%M:%S UTC')
+    last_backup_time_str = bot_state.get('last_backup_time', 'Never')
+    if last_backup_time_str != 'Never':
+        last_backup_time_str = datetime.fromisoformat(last_backup_time_str).strftime('%Y-%m-%d %H:%M:%S UTC')
     
     with open(CONFIG_FILE, 'r') as f: current_config = json.load(f)
     interval = current_config.get('telegram', {}).get('backup_interval')
-    auto_backup_status = f"Active (Every {interval} mins)" if interval else "Inactive"
+    auto_backup_status = f"{EMOJI['SUCCESS']} Active (Every {interval} mins)" if interval else f"{EMOJI['ERROR']} Inactive"
     
     text = f"""
 {EMOJI['PANEL']} *Marzban Control Panel*
 {EMOJI['STATUS']} *Dashboard*
-> *Last Backup:* `{last_backup_time}`
-> *Auto-Backup:* `{auto_backup_status}`
+> *Last Backup:* `{last_backup_time_str}`
+> *Auto-Backup Status:* {auto_backup_status}
 """
     try:
-        bot.edit_message_text(text, message.chat.id, message.message_id, reply_markup=main_menu_keyboard())
-    except telebot.apihelper.ApiTelegramException: # If message is the same
-        bot.send_message(message.chat.id, text, reply_markup=main_menu_keyboard())
+        bot.edit_message_text(text, chat_id, message_id, reply_markup=main_menu_keyboard())
+    except telebot.apihelper.ApiTelegramException as e:
+        if 'message is not modified' not in e.description:
+            bot.send_message(chat_id, text, reply_markup=main_menu_keyboard())
 
+def display_settings_menu(message):
+    text = f"{EMOJI['SETTINGS']} *Settings Menu*\n\nManage auto-backup or view your configuration."
+    bot.edit_message_text(text, message.chat.id, message.message_id, reply_markup=settings_menu_keyboard())
+
+# --- Core Logic Functions ---
+def toggle_auto_backup(enabled: bool, message):
+    """Handles the logic for enabling or disabling auto-backup."""
+    with open(CONFIG_FILE, 'r+') as f:
+        data = json.load(f)
+        data.setdefault('telegram', {})
+        if not enabled: # Disabling
+            data['telegram'].pop('backup_interval', None)
+            bot.edit_message_text(f"{EMOJI['WAIT']} Disabling auto-backup...", message.chat.id, message.message_id)
+        else: # Enabling
+            # Set a default interval, user will be prompted to change it
+            data['telegram']['backup_interval'] = data['telegram'].get('backup_interval', '60')
+            bot.edit_message_text(f"{EMOJI['WAIT']} Enabling auto-backup...", message.chat.id, message.message_id)
+        f.seek(0); json.dump(data, f, indent=4); f.truncate()
+    
+    success, output, duration = run_main_script(['do-auto-backup-setup'])
+    if success:
+        action_text = "Enabled" if enabled else "Disabled"
+        final_text = f"{EMOJI['SUCCESS']} *Auto-Backup {action_text}*\n\nSystem schedule has been updated."
+        bot.edit_message_text(final_text, message.chat.id, message.message_id)
+        time.sleep(2)
+        if enabled:
+            # If enabling, prompt for interval
+            user_states[message.chat.id] = {'state': 'awaiting_interval'}
+            text = f"{EMOJI['CLOCK']} Auto-backup is now enabled. Please set the interval in *minutes* (e.g., `60`)."
+            bot.edit_message_text(text, message.chat.id, message.message_id)
+        else:
+            display_settings_menu(message) # Go back to settings menu after disabling
+    else:
+        final_text = f"{EMOJI['ERROR']} *Operation Failed!*\n\n*Details:*\n```{output}```"
+        bot.edit_message_text(final_text, message.chat.id, message.message_id)
+        time.sleep(4)
+        display_settings_menu(message)
 
 # --- Message & Callback Handlers ---
 @bot.message_handler(commands=['start'])
@@ -156,11 +194,13 @@ def handle_callbacks(call):
     action = call.data
     message = call.message
 
-    if action == "main_menu":
-        display_main_menu(message)
-
+    # Main Menu Navigation
+    if action == "main_menu": display_main_menu(message)
+    elif action == "settings_menu": display_settings_menu(message)
+    
+    # Backup & Restore Actions
     elif action == "do_backup":
-        bot.edit_message_text(f"{EMOJI['WAIT']} *Creating Backup...*\nThis can take a few minutes. Please wait.", message.chat.id, message.message_id)
+        bot.edit_message_text(f"{EMOJI['WAIT']} *Creating Backup...*\nThis might take a moment. Please wait.", message.chat.id, message.message_id)
         success, output, duration = run_main_script(['do-backup'])
         if success:
             update_bot_state('last_backup_time', datetime.utcnow().isoformat())
@@ -168,37 +208,28 @@ def handle_callbacks(call):
         else:
             final_text = f"{EMOJI['ERROR']} *Backup Failed!*\n\n*Details:*\n```{output}```"
         bot.edit_message_text(final_text, message.chat.id, message.message_id)
-        time.sleep(2) # Give user time to read before showing menu
-        display_main_menu(message)
+        time.sleep(3); display_main_menu(message)
 
     elif action == "restore_start":
-        text = f"""
-{EMOJI['DANGER']} *CRITICAL WARNING* {EMOJI['DANGER']}
-You are about to restore data. This action will **completely overwrite** your current Marzban configuration and database.
-
-*This cannot be undone.*
-
-Are you absolutely sure you want to proceed?
-"""
+        text = f"{EMOJI['DANGER']} *CRITICAL WARNING*\n\nThis will **overwrite** all current data. This action cannot be undone. Are you sure?"
         bot.edit_message_text(text, message.chat.id, message.message_id, reply_markup=restore_confirmation_keyboard())
 
     elif action == "restore_confirm":
         user_states[message.chat.id] = {'state': 'awaiting_restore_file'}
         text = f"{EMOJI['INFO']} Please send the `.tar.gz` backup file to restore."
         bot.edit_message_text(text, message.chat.id, message.message_id)
-
-    elif action == "settings_menu":
-        text = f"{EMOJI['SETTINGS']} *Settings Menu*\n\nHere you can manage auto-backup settings and view your current configuration."
-        bot.edit_message_text(text, message.chat.id, message.message_id, reply_markup=settings_menu_keyboard())
-
+        
+    # Settings Actions
+    elif action == "settings_autobackup_enable": toggle_auto_backup(True, message)
+    elif action == "settings_autobackup_disable": toggle_auto_backup(False, message)
+    
     elif action == "settings_edit_interval":
         user_states[message.chat.id] = {'state': 'awaiting_interval'}
-        text = f"{EMOJI['CLOCK']} Please enter the new auto-backup interval in *minutes* (e.g., `60`).\n\nEnter `0` to disable auto-backup."
+        text = f"{EMOJI['CLOCK']} Please enter the new auto-backup interval in *minutes*."
         bot.edit_message_text(text, message.chat.id, message.message_id)
 
     elif action == "settings_view_config":
-        with open(CONFIG_FILE, 'r') as f: current_config = json.load(f)
-        config_text = json.dumps(current_config, indent=2)
+        with open(CONFIG_FILE, 'r') as f: config_text = json.dumps(json.load(f), indent=2)
         text = f"{EMOJI['INFO']} *Full Configuration (`config.json`)*\n\n```json\n{config_text}\n```"
         bot.edit_message_text(text, message.chat.id, message.message_id, reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton(f"{EMOJI['BACK']} Back to Settings", callback_data="settings_menu")))
 
@@ -206,69 +237,57 @@ Are you absolutely sure you want to proceed?
 @admin_only
 def handle_stateful_text(message):
     state_info = user_states.pop(message.chat.id, None)
-    if not state_info: return
+    if not state_info or state_info['state'] != 'awaiting_interval': return
     
-    if state_info['state'] == 'awaiting_interval':
-        try:
-            interval = int(message.text)
-            if interval < 0: raise ValueError("Interval cannot be negative.")
-
-            with open(CONFIG_FILE, 'r+') as f:
-                data = json.load(f)
-                data.setdefault('telegram', {})
-                if interval == 0:
-                    data['telegram'].pop('backup_interval', None)
-                    action_text = "disabled"
-                else:
-                    data['telegram']['backup_interval'] = str(interval)
-                    action_text = f"set to `{interval}` minutes"
-                f.seek(0); json.dump(data, f, indent=4); f.truncate()
-            
-            bot.send_message(message.chat.id, f"{EMOJI['WAIT']} Auto-backup has been {action_text}. Applying changes to system schedule...")
-            success, output, duration = run_main_script(['do-auto-backup-setup'])
-            final_text = f"{EMOJI['SUCCESS']} *Schedule Updated!*\n\n`Operation took {duration} seconds.`" if success else f"{EMOJI['ERROR']} *Update Failed!*\n\n*Details:*\n```{output}```"
-            bot.send_message(message.chat.id, final_text)
-            time.sleep(2)
-            display_main_menu(message)
-        except (ValueError, TypeError):
-            bot.send_message(message.chat.id, f"{EMOJI['ERROR']} Invalid input. Please enter a number (e.g., 60 or 0).")
-            display_main_menu(message)
+    try:
+        interval = int(message.text)
+        if interval <= 0: raise ValueError("Interval must be positive.")
+        with open(CONFIG_FILE, 'r+') as f:
+            data = json.load(f)
+            data.setdefault('telegram', {})['backup_interval'] = str(interval)
+            f.seek(0); json.dump(data, f, indent=4); f.truncate()
+        
+        bot.send_message(message.chat.id, f"{EMOJI['WAIT']} Interval set to `{interval}` minutes. Updating system schedule...")
+        success, output, duration = run_main_script(['do-auto-backup-setup'])
+        final_text = f"{EMOJI['SUCCESS']} *Schedule Updated!*\n\n`Took {duration}s`" if success else f"{EMOJI['ERROR']} *Update Failed!*\n\n```{output}```"
+        bot.send_message(message.chat.id, final_text)
+        time.sleep(2); display_settings_menu(message)
+    except (ValueError, TypeError):
+        bot.send_message(message.chat.id, f"{EMOJI['ERROR']} Invalid input. Please enter a positive number (e.g., 60).")
+        display_settings_menu(message)
 
 @bot.message_handler(content_types=['document'], func=lambda msg: user_states.get(msg.chat.id) is not None)
 @admin_only
 def handle_restore_document(message):
     state_info = user_states.pop(message.chat.id, None)
     if not state_info or state_info['state'] != 'awaiting_restore_file': return
-
     if not message.document.file_name.endswith('.tar.gz'):
-        bot.send_message(message.chat.id, f"{EMOJI['ERROR']} Invalid file. Please send a `.tar.gz` archive.")
+        bot.send_message(message.chat.id, f"{EMOJI['ERROR']} Invalid file type. Please send a `.tar.gz` archive.")
         display_main_menu(message)
         return
 
-    bot.send_message(message.chat.id, f"{EMOJI['WAIT']} Downloading file...")
-    restore_file_path = None
+    bot.edit_message_text(f"{EMOJI['WAIT']} Downloading file...", message.chat.id, message.message_id)
+    restore_file_path = os.path.join("/tmp", f"restore_{int(time.time())}.tar.gz")
     try:
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
-        restore_file_path = os.path.join("/tmp", f"restore_{int(time.time())}.tar.gz")
         with open(restore_file_path, 'wb') as f: f.write(downloaded_file)
-
+        
         bot.send_message(message.chat.id, f"{EMOJI['WARNING']} *Restore in progress...*\nThis will take several minutes. The bot will be unresponsive until it's done.")
         success, output, duration = run_main_script(['do-restore', restore_file_path])
         if success:
             update_bot_state('last_backup_time', 'Never (Just Restored)')
-            final_text = f"{EMOJI['SUCCESS']} *Restore Complete!*\n\nYour system has been restored and restarted.\n`Operation took {duration} seconds.`"
+            final_text = f"{EMOJI['SUCCESS']} *Restore Complete!*\n\nSystem restored and restarted.\n`Took {duration}s`"
         else:
-            final_text = f"{EMOJI['ERROR']} *Restore Failed!*\n\n*Details:*\n```{output}```"
+            final_text = f"{EMOJI['ERROR']} *Restore Failed!*\n\n```{output}```"
         bot.send_message(message.chat.id, final_text)
-        time.sleep(2)
-        display_main_menu(message)
+        time.sleep(3); display_main_menu(message)
     finally:
-        if restore_file_path and os.path.exists(restore_file_path): os.remove(restore_file_path)
+        if os.path.exists(restore_file_path): os.remove(restore_file_path)
 
 # --- Bot Execution ---
 if __name__ == '__main__':
-    logger.info(f"Starting Bot v5.0 (Phoenix) for Admin ID: {ADMIN_CHAT_ID}...")
+    logger.info(f"Starting Bot v5.1 (Phoenix+) for Admin ID: {ADMIN_CHAT_ID}...")
     while True:
         try:
             bot.infinity_polling(timeout=120, logger_level=logging.WARNING)
