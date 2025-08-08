@@ -2,7 +2,7 @@
 # =================================================================
 # Marzban Complete Backup & Restore Panel
 # Creator: @HEXMOSTAFA
-# Version: 4.3 (Optimized for .tar.gz format)
+# Version: 4.4 (Database Connection Fix)
 # =================================================================
 
 import os
@@ -36,11 +36,11 @@ SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 FILES_TO_BACKUP = ["/var/lib/marzban", "/opt/marzban"]
 EXCLUDED_DATABASES = ['information_schema', 'mysql', 'performance_schema', 'sys']
-EXCLUDED_DIRS_IN_VARLIB = ['mysql', 'logs'] # Don't back up the mysql directory inside /var/lib/marzban
+EXCLUDED_DIRS_IN_VARLIB = ['mysql', 'logs'] 
 CRON_JOB_IDENTIFIER = "# HEXMOSTAFA_MARZBAN_BACKUP_JOB"
 MARZBAN_SERVICE_PATH = "/opt/marzban"
 LOG_FILE = os.path.join(SCRIPT_DIR, "marzban_backup.log")
-DB_BACKUP_DIR_NAME = "db_dumps" # Standard directory name for database dumps inside the archive
+DB_BACKUP_DIR_NAME = "db_dumps"
 
 # --- Setup Logging ---
 logging.basicConfig(
@@ -66,7 +66,7 @@ console = Console(theme=custom_theme)
 
 def show_header():
     console.clear()
-    header_text = Text("Marzban Complete Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 4.3", justify="center", style="header")
+    header_text = Text("Marzban Complete Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 4.4", justify="center", style="header")
     console.print(Panel(header_text, style="blue", border_style="info"))
     console.print()
 
@@ -157,12 +157,11 @@ def download_from_telegram(tg_config: Dict[str, str], timeout: int = 120) -> Opt
     start_time = time()
     offset = 0
     try:
-        # Get the latest update_id to avoid processing old messages
         updates = requests.get(f"https://api.telegram.org/bot{bot_token}/getUpdates?limit=1&timeout=5", timeout=10).json()
         if updates['ok'] and updates['result']:
             offset = updates['result'][0]['update_id'] + 1
     except requests.RequestException:
-        pass # Ignore errors, just proceed with offset 0
+        pass
 
     while time() - start_time < timeout:
         try:
@@ -209,14 +208,11 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
     log_message("Starting full backup process...", "info")
     timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     
-    # Create a temporary directory for all backup contents
     backup_temp_dir = tempfile.mkdtemp(prefix="marzban_backup_")
     
-    # Define the final archive path
-    archive_filename = os.path.join(backup_temp_dir, f"marzban_full_backup_{timestamp}.tar.gz")
+    final_archive_path = f"/tmp/marzban_backup_{timestamp}.tar.gz"
 
     try:
-        # Database backup logic
         container_name = find_database_container()
         db_config = config.get('database', {})
         if container_name and db_config.get('user') and db_config.get('password'):
@@ -226,35 +222,32 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
                 os.makedirs(db_backup_path)
                 
                 # Command to list all databases
-                list_dbs_cmd = f"docker exec -e MYSQL_PWD='{db_config['password']}' {container_name} mysql -u {db_config['user']} -e 'SHOW DATABASES;'"
+                #  --- اصلاحیه: استفاده از نام کانتینر به جای localhost ---
+                list_dbs_cmd = f"docker exec -i {container_name} mysql -u {db_config['user']} -p'{db_config['password']}' -e 'SHOW DATABASES;'"
                 result = subprocess.run(list_dbs_cmd, shell=True, check=True, capture_output=True, text=True)
                 databases = [db for db in result.stdout.strip().split('\n') if db not in EXCLUDED_DATABASES and db != 'Database']
                 
                 for db in databases:
                     log_message(f"Dumping database: {db}", "info")
+                    #  --- اصلاحیه: استفاده از نام کانتینر به جای localhost ---
                     dump_cmd = f"docker exec -i {container_name} mysqldump -u{db_config['user']} -p'{db_config['password']}' --databases {db} > {os.path.join(db_backup_path, f'{db}.sql')}"
                     subprocess.run(dump_cmd, shell=True, check=True, executable='/bin/bash')
                 log_message("Database backup complete.", "success")
             except subprocess.CalledProcessError as e:
                 log_message(f"Database backup failed: {e.stderr}", "danger")
-                # Continue with filesystem backup even if DB backup fails
             except Exception as e:
                 log_message(f"An unexpected error occurred during database backup: {e}", "danger")
 
-        # Filesystem backup logic
         log_message("Backing up filesystem...", "info")
         
-        # We need a separate directory to add to the tar
         fs_backup_path = os.path.join(backup_temp_dir, "filesystem")
         os.makedirs(fs_backup_path)
 
         def ignore_func(path, names):
             ignored_names = []
             if 'var' in path and 'lib' in path and 'marzban' in path:
-                # Exclude specific directories inside /var/lib/marzban
                 ignored_names.extend(EXCLUDED_DIRS_IN_VARLIB)
             
-            # Additional exclusions for temporary/cache files
             ignored_names.extend(['__pycache__', '.env.example', '*.sock*'])
             
             return set(ignored_names).intersection(names)
@@ -271,15 +264,12 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
         
         log_message("File backup complete.", "success")
         
-        # Compress the temporary directory into a .tar.gz file
         log_message("Compressing backup into .tar.gz file...", "info")
-        final_archive_path = f"/tmp/marzban_backup_{timestamp}.tar.gz"
         with tarfile.open(final_archive_path, "w:gz") as tar:
             tar.add(backup_temp_dir, arcname=os.path.basename(backup_temp_dir))
         
         log_message(f"Backup created successfully: {final_archive_path}", "success")
         
-        # Telegram upload logic
         tg_config = config.get('telegram', {})
         if tg_config.get('bot_token') and tg_config.get('admin_chat_id'):
             log_message("Sending backup to Telegram...", "info")
@@ -322,13 +312,13 @@ def _restore_database_from_dump(container_name: str, db_config: Dict[str, str], 
         for sql_file in sql_files:
             db = sql_file.replace('.sql', '')
             
-            # Drop and create database
             log_message(f"Dropping and recreating database: {db}", "info")
+            # --- اصلاحیه: استفاده از نام کانتینر به جای localhost ---
             drop_cmd = f"docker exec -i {container_name} mysql -u{db_config['user']} -p'{db_config['password']}' -e 'DROP DATABASE IF EXISTS `{db}`; CREATE DATABASE `{db}`;'"
             subprocess.run(drop_cmd, shell=True, check=True, executable='/bin/bash')
             
-            # Import data
             log_message(f"Importing data into database: {db}", "info")
+            # --- اصلاحیه: استفاده از نام کانتینر به جای localhost ---
             import_cmd = f"docker exec -i {container_name} mysql -u{db_config['user']} -p'{db_config['password']}' {db} < {os.path.join(db_dump_path, sql_file)}"
             subprocess.run(import_cmd, shell=True, check=True, executable='/bin/bash')
         
@@ -379,13 +369,11 @@ def restore_flow():
     
     temp_dir = tempfile.TemporaryDirectory()
     try:
-        # Stop Marzban services
         with console.status("[info]Stopping all Marzban services...[/info]", spinner="dots"):
             if not run_marzban_command("down"):
                 raise Exception("Could not stop Marzban services.")
         log_message("All Marzban services stopped.", "success")
         
-        # Extract the archive
         log_message(f"Extracting backup file '{archive_path}'...", "info")
         with tarfile.open(archive_path, "r:gz") as tar:
             tar.extractall(path=temp_dir.name)
@@ -393,7 +381,6 @@ def restore_flow():
         
         extracted_dir = os.path.join(temp_dir.name, os.listdir(temp_dir.name)[0])
         
-        # Restore filesystem files
         log_message("Restoring Marzban configuration files...", "info")
         for path in FILES_TO_BACKUP:
             source_path = os.path.join(extracted_dir, os.path.relpath(path, '/'))
@@ -405,7 +392,6 @@ def restore_flow():
                 shutil.copytree(source_path, path)
         log_message("Filesystem restore completed successfully.", "success")
 
-        # Restore database if available
         container_name = find_database_container()
         if container_name:
             db_dump_path = os.path.join(extracted_dir, DB_BACKUP_DIR_NAME)
@@ -468,7 +454,6 @@ def setup_cronjob_flow():
 
 def main():
     """Main function to dispatch tasks or run interactively."""
-    # Non-interactive mode
     if len(sys.argv) > 1:
         command = sys.argv[1]
         logger.info(f"Running in Non-Interactive Mode, command: {command}")
@@ -480,10 +465,9 @@ def main():
             try: run_full_backup(config, is_cron=True)
             except Exception: sys.exit(1)
         elif command == 'do-auto-backup-setup':
-            sys.exit(0 if setup_cronjob_flow() else 1) # Note: interactive=False is not used, the logic will handle it
+            sys.exit(0 if setup_cronjob_flow() else 1)
         sys.exit(0)
 
-    # Interactive mode
     if os.geteuid() != 0:
         log_message("This script requires root privileges. Please run with 'sudo'.", "danger")
         sys.exit(1)
