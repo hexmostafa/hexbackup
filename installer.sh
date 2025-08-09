@@ -13,6 +13,8 @@ VENV_DIR="venv"
 LAUNCHER_NAME="hexbackup-panel"
 SERVICE_NAME="marzban_bot.service"
 REQUIREMENTS_FILE="requirements.txt"
+PANEL_SCRIPT_NAME="marzban_panel.py"
+BOT_SCRIPT_NAME="marzban_bot.py"
 
 C_RESET='\e[0m'
 C_RED='\e[1;31m'
