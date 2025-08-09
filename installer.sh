@@ -3,7 +3,10 @@
 # =================================================================
 # HexBackup | Marzban Backup Tool Installer/Uninstaller
 # Creator: @HEXMOSTAFA
-# Version: 2.1.0 (Optimized for New Bot & Panel)
+# Version: 2.2.0 (Stable & Robust)
+#
+# This script installs or uninstalls the HexBackup tool,
+# sets up a virtual environment, and creates a system-wide command.
 # =================================================================
 
 set -e
@@ -12,7 +15,6 @@ INSTALL_DIR="/opt/hexbackup"
 VENV_DIR="venv"
 LAUNCHER_NAME="hexbackup-panel"
 SERVICE_NAME="marzban_bot.service"
-REQUIREMENTS_FILE="requirements.txt"
 GITHUB_USER="HEXMOSTAFA"
 REPO_NAME="hexbackup"
 BRANCH="main"
@@ -119,17 +121,23 @@ install() {
     mkdir -p "$INSTALL_DIR"
     print_msg "$C_GREEN" "✔ Directory created."
     echo
-    print_msg "$C_YELLOW" "▶ Downloading scripts from GitHub..."
-    for file in "$PANEL_SCRIPT_NAME" "$BOT_SCRIPT_NAME" "$REQUIREMENTS_FILE"; do
-        print_msg "$C_CYAN" "  - Downloading ${file}..."
-        curl -sSL -o "${INSTALL_DIR}/${file}" "https://raw.githubusercontent.com/${GITHUB_USER}/${REPO_NAME}/${BRANCH}/${file}"
-        if [ ! -s "${INSTALL_DIR}/${file}" ]; then
-            print_msg "$C_RED" "❌ Failed to download ${file}."
-            exit 1
-        fi
-    done
+    print_msg "$C_YELLOW" "▶ Downloading scripts and requirements from GitHub..."
+    
+    # Download script files
+    print_msg "$C_CYAN" "  - Downloading marzban_panel.py..."
+    curl -sSL -o "${INSTALL_DIR}/marzban_panel.py" "https://raw.githubusercontent.com/HEXMOSTAFA/hexbackup/main/marzban_panel.py"
+    print_msg "$C_CYAN" "  - Downloading marzban_bot.py..."
+    curl -sSL -o "${INSTALL_DIR}/marzban_bot.py" "https://raw.githubusercontent.com/HEXMOSTAFA/hexbackup/main/marzban_bot.py"
+    print_msg "$C_CYAN" "  - Downloading requirements.txt..."
+    curl -sSL -o "${INSTALL_DIR}/requirements.txt" "https://raw.githubusercontent.com/HEXMOSTAFA/hexbackup/main/requirements.txt"
+
+    if [ ! -s "${INSTALL_DIR}/marzban_panel.py" ] || [ ! -s "${INSTALL_DIR}/marzban_bot.py" ] || [ ! -s "${INSTALL_DIR}/requirements.txt" ]; then
+        print_msg "$C_RED" "❌ Failed to download one or more files. Please check your internet connection or the repository URL."
+        exit 1
+    fi
+
     chmod +x "${INSTALL_DIR}"/*.py
-    print_msg "$C_GREEN" "✔ Scripts downloaded."
+    print_msg "$C_GREEN" "✔ Scripts downloaded successfully."
     echo
     print_msg "$C_YELLOW" "▶ Setting up Python virtual environment..."
     python3 -m venv "${INSTALL_DIR}/${VENV_DIR}"
@@ -142,7 +150,7 @@ install() {
     print_msg "$C_YELLOW" "▶ Creating launcher command '${LAUNCHER_NAME}'..."
     cat << EOF > "/usr/local/bin/${LAUNCHER_NAME}"
 #!/bin/bash
-exec "${INSTALL_DIR}/${VENV_DIR}/bin/python3" "${INSTALL_DIR}/${PANEL_SCRIPT_NAME}" "\$@"
+exec "${INSTALL_DIR}/${VENV_DIR}/bin/python3" "${INSTALL_DIR}/marzban_panel.py" "\$@"
 EOF
     chmod +x "/usr/local/bin/${LAUNCHER_NAME}"
     print_msg "$C_GREEN" "✔ Launcher command created."
