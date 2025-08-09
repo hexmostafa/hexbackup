@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 # =================================================================
-# Marzban Professional Control Bot - Hybrid Dashboard Edition
+# Marzban Professional Control Bot
 # Creator: @HEXMOSTAFA
-# Version: 7.1.0 (Hybrid)
-#
-# The perfect balance: A powerful 2x2 main dashboard for core
-# operations, plus a dedicated, clean settings/info view.
+# Version: 7.1.1 (Clean & Optimized)
 # =================================================================
 import os
 import json
@@ -14,15 +11,10 @@ import logging
 import time
 from datetime import datetime
 from typing import Tuple, List, Optional
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.util import quick_markup
 
-try:
-    import telebot
-    from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-except ImportError:
-    print("FATAL ERROR: 'pyTelegramBotAPI' is not installed. Please run 'pip install pyTelegramBotAPI'.")
-    exit(1)
-
-# --- Global Configurations & Emojis ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 MAIN_PANEL_SCRIPT = os.path.join(SCRIPT_DIR, "marzban_panel.py")
@@ -36,7 +28,6 @@ EMOJI = {
     "CLOCK": "⏱️", "CONFIRM": "👍", "TOGGLE_ON": "🟢", "TOGGLE_OFF": "🔴"
 }
 
-# --- Logging & Config/State Loading ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', handlers=[logging.FileHandler(LOG_FILE, encoding='utf-8'), logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
@@ -47,7 +38,7 @@ try:
     if not BOT_TOKEN or not ADMIN_CHAT_ID: raise ValueError("Bot Token or Admin Chat ID is missing.")
 except Exception as e:
     logger.critical(f"FATAL: Could not load config.json. Error: {e}")
-    exit(1)
+    sys.exit(1)
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="Markdown")
 user_states = {}
@@ -63,9 +54,10 @@ def get_bot_state() -> dict:
         with open(BOT_STATE_FILE, 'r') as f: return json.load(f)
     except (json.JSONDecodeError, FileNotFoundError): return {}
 
-# --- Core Helper Functions ---
 def run_main_script(args: List[str]) -> Tuple[bool, str, str]:
     python_executable = subprocess.run(['which', 'python3'], capture_output=True, text=True).stdout.strip() or "python3"
+    venv_python = os.path.join(SCRIPT_DIR, 'venv', 'bin', 'python3')
+    if os.path.exists(venv_python): python_executable = venv_python
     command = ['sudo', python_executable, MAIN_PANEL_SCRIPT] + args
     start_time = time.time()
     try:
@@ -86,65 +78,72 @@ def admin_only(func):
         return func(message_or_call)
     return wrapper
 
-# --- UI Engine ---
 def update_display(chat_id: int, message_id: int, text: str, markup: Optional[InlineKeyboardMarkup] = None):
     try:
-        bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+        bot.edit_message_text(text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown")
     except telebot.apihelper.ApiTelegramException as e:
         if 'message is not modified' not in e.description: logger.error(f"Failed to update display: {e}")
 
-# --- Keyboard Definitions ---
 def main_menu_keyboard():
-    return InlineKeyboardMarkup(row_width=2).add(
-        InlineKeyboardButton(f"{EMOJI['BACKUP']} بکاپ فوری", callback_data="do_backup"),
-        InlineKeyboardButton(f"{EMOJI['RESTORE']} ریستور از بکاپ", callback_data="restore_start"),
-        InlineKeyboardButton(f"{EMOJI['AUTO']} مدیریت بکاپ خودکار", callback_data="autobackup_menu"),
-        InlineKeyboardButton(f"{EMOJI['SETTINGS']} تنظیمات و اطلاعات", callback_data="settings_info_menu")
-    )
+    return quick_markup({
+        f"{EMOJI['BACKUP']} بکاپ فوری": {'callback_data': "do_backup"},
+        f"{EMOJI['RESTORE']} ریستور از بکاپ": {'callback_data': "restore_start"},
+        f"{EMOJI['AUTO']} مدیریت بکاپ خودکار": {'callback_data': "autobackup_menu"},
+        f"{EMOJI['SETTINGS']} تنظیمات و اطلاعات": {'callback_data': "settings_info_menu"},
+    }, row_width=2)
 
 def autobackup_menu_keyboard():
-    with open(CONFIG_FILE, 'r') as f: current_config = json.load(f)
-    is_enabled = 'backup_interval' in current_config.get('telegram', {})
-    toggle_text = f"{EMOJI['TOGGLE_OFF']} غیرفعال‌سازی" if is_enabled else f"{EMOJI['TOGGLE_ON']} فعال‌سازی"
-    toggle_action = "autobackup_disable" if is_enabled else "autobackup_enable"
-    markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton(toggle_text, callback_data=toggle_action))
-    if is_enabled:
-        markup.add(InlineKeyboardButton(f"{EMOJI['EDIT']} تغییر بازه زمانی", callback_data="autobackup_edit_interval"))
-    markup.add(InlineKeyboardButton(f"{EMOJI['BACK']} بازگشت به منوی اصلی", callback_data="main_menu"))
-    return markup
+    try:
+        with open(CONFIG_FILE, 'r') as f: current_config = json.load(f)
+        is_enabled = 'backup_interval' in current_config.get('telegram', {})
+        toggle_text = f"{EMOJI['TOGGLE_OFF']} غیرفعال‌سازی" if is_enabled else f"{EMOJI['TOGGLE_ON']} فعال‌سازی"
+        toggle_action = "autobackup_disable" if is_enabled else "autobackup_enable"
+        
+        markup_dict = {
+            toggle_text: {'callback_data': toggle_action},
+        }
+        if is_enabled:
+            markup_dict[f"{EMOJI['EDIT']} تغییر بازه زمانی"] = {'callback_data': "autobackup_edit_interval"}
+        
+        markup_dict[f"{EMOJI['BACK']} بازگشت به منوی اصلی"] = {'callback_data': "main_menu"}
+        return quick_markup(markup_dict, row_width=1)
+    except Exception as e:
+        logger.error(f"Error creating autobackup keyboard: {e}")
+        return main_menu_keyboard()
 
 def restore_confirmation_keyboard():
-    return InlineKeyboardMarkup(row_width=1).add(
-        InlineKeyboardButton(f"{EMOJI['DANGER']} بله، ریستور انجام شود", callback_data="restore_confirm"),
-        InlineKeyboardButton(f"{EMOJI['BACK']} انصراف", callback_data="main_menu")
-    )
+    return quick_markup({
+        f"{EMOJI['DANGER']} بله، ریستور انجام شود": {'callback_data': "restore_confirm"},
+        f"{{EMOJI['BACK']}} انصراف": {'callback_data': "main_menu"},
+    }, row_width=1)
 
 def settings_info_keyboard():
-     return InlineKeyboardMarkup().add(InlineKeyboardButton(f"{EMOJI['BACK']} بازگشت به منوی اصلی", callback_data="main_menu"))
+    return quick_markup({f"{{EMOJI['BACK']}} بازگشت به منوی اصلی": {'callback_data': "main_menu"}}, row_width=1)
 
-# --- UI View Functions ---
 def display_main_menu(chat_id: int, message_id: int):
     bot_state = get_bot_state()
     last_backup = bot_state.get('last_backup_time', 'هیچوقت')
     if last_backup != 'هیچوقت': last_backup = datetime.fromisoformat(last_backup).strftime('%Y-%m-%d %H:%M')
-    with open(CONFIG_FILE, 'r') as f: interval = json.load(f).get('telegram', {}).get('backup_interval')
+    
+    with open(CONFIG_FILE, 'r') as f: config_data = json.load(f)
+    interval = config_data.get('telegram', {}).get('backup_interval')
     auto_status = f"{EMOJI['SUCCESS']} فعال (هر {interval} دقیقه)" if interval else f"{EMOJI['ERROR']} غیرفعال"
+    
     text = f"{EMOJI['PANEL']} *پنل مدیریت مرزبان*\n\n`آخرین بکاپ:` {last_backup}\n`بکاپ خودکار:` {auto_status}"
     update_display(chat_id, message_id, text, main_menu_keyboard())
 
 def display_autobackup_menu(chat_id: int, message_id: int):
-    with open(CONFIG_FILE, 'r') as f: interval = json.load(f).get('telegram', {}).get('backup_interval')
+    with open(CONFIG_FILE, 'r') as f: config_data = json.load(f)
+    interval = config_data.get('telegram', {}).get('backup_interval')
     status_text = f"در حال حاضر بکاپ خودکار *فعال* است و هر `{interval}` دقیقه یکبار اجرا می‌شود." if interval else "بکاپ خودکار در حال حاضر *غیرفعال* است."
     text = f"{EMOJI['AUTO']} *مدیریت بکاپ خودکار*\n\n{status_text}\n\nاز دکمه‌های زیر برای مدیریت استفاده کنید."
     update_display(chat_id, message_id, text, autobackup_menu_keyboard())
 
 def display_settings_info_view(chat_id: int, message_id: int):
-     with open(CONFIG_FILE, 'r') as f: config_text = json.dumps(json.load(f), indent=2)
-     text = f"{EMOJI['SETTINGS']} *تنظیمات و اطلاعات*\n\nاین اطلاعات از فایل `config.json` خوانده می‌شود.\n\n```json\n{config_text}\n```"
-     update_display(chat_id, message_id, text, settings_info_keyboard())
+    with open(CONFIG_FILE, 'r') as f: config_text = json.dumps(json.load(f), indent=2)
+    text = f"{EMOJI['SETTINGS']} *تنظیمات و اطلاعات*\n\nاین اطلاعات از فایل `config.json` خوانده می‌شود.\n\n```json\n{config_text}\n```"
+    update_display(chat_id, message_id, text, settings_info_keyboard())
 
-# --- Message & Callback Handlers ---
 @bot.message_handler(commands=['start'])
 @admin_only
 def handle_start(message):
@@ -158,18 +157,16 @@ def handle_callbacks(call):
     action = call.data
     chat_id, msg_id = call.message.chat.id, call.message.message_id
 
-    # Navigation
     if action == "main_menu": display_main_menu(chat_id, msg_id)
     elif action == "autobackup_menu": display_autobackup_menu(chat_id, msg_id)
     elif action == "settings_info_menu": display_settings_info_view(chat_id, msg_id)
 
-    # Core Actions
     elif action == "do_backup":
         update_display(chat_id, msg_id, f"{EMOJI['WAIT']} *در حال ایجاد بکاپ کامل...*", None)
-        success, output, duration = run_main_script(['do-backup'])
+        success, output, duration = run_main_script(['run-backup'])
         if success:
             update_bot_state('last_backup_time', datetime.utcnow().isoformat())
-            result_text = f"{EMOJI['SUCCESS']} *بکاپ کامل شد!*\nفایل ارسال شد. `({duration} ثانیه)`"
+            result_text = f"{EMOJI['SUCCESS']} *بکاپ کامل شد!* `({duration} ثانیه)`"
         else:
             result_text = f"{EMOJI['ERROR']} *عملیات ناموفق بود!*\n```{output}```"
         update_display(chat_id, msg_id, result_text, None)
@@ -182,8 +179,7 @@ def handle_callbacks(call):
     elif action == "restore_confirm":
         user_states[chat_id] = {'state': 'awaiting_restore_file', 'message_id': msg_id}
         update_display(chat_id, msg_id, f"{EMOJI['INFO']} لطفاً فایل بکاپ با فرمت `.tar.gz` را ارسال کنید.", None)
-        
-    # Auto-Backup Actions
+
     elif action == "autobackup_enable":
         user_states[chat_id] = {'state': 'awaiting_interval', 'message_id': msg_id}
         update_display(chat_id, msg_id, f"{EMOJI['CLOCK']} برای فعال‌سازی، لطفاً بازه زمانی را به *دقیقه* وارد کنید (مثلا: `60`).", None)
@@ -208,16 +204,18 @@ def handle_stateful_messages(message):
     if not state_info: return
 
     msg_id_to_edit = state_info['message_id']
-    try: bot.delete_message(chat_id, message.message_id) # Clean up user's message/file
+    try: bot.delete_message(chat_id, message.message_id) 
     except Exception: pass
 
-    # Handle Interval Input
     if state_info['state'] == 'awaiting_interval' and message.content_type == 'text':
         try:
             interval = int(message.text)
             if interval <= 0: raise ValueError("Interval must be positive.")
             update_display(chat_id, msg_id_to_edit, f"{EMOJI['WAIT']} در حال تنظیم بازه زمانی روی `{interval}` دقیقه...", None)
-            with open(CONFIG_FILE, 'r+') as f: data = json.load(f); data.setdefault('telegram', {})['backup_interval'] = str(interval); f.seek(0); json.dump(data, f, indent=4); f.truncate()
+            with open(CONFIG_FILE, 'r+') as f:
+                data = json.load(f)
+                data.setdefault('telegram', {})['backup_interval'] = str(interval)
+                f.seek(0); json.dump(data, f, indent=4); f.truncate()
             success, _, _ = run_main_script(['do-auto-backup-setup'])
             result_text = f"{EMOJI['SUCCESS']} زمان‌بندی با موفقیت به‌روز شد." if success else f"{EMOJI['ERROR']} خطا در به‌روزرسانی."
             update_display(chat_id, msg_id_to_edit, result_text, None)
@@ -226,7 +224,6 @@ def handle_stateful_messages(message):
             update_display(chat_id, msg_id_to_edit, f"{EMOJI['ERROR']} ورودی نامعتبر است. لطفاً یک عدد وارد کنید.", None)
             time.sleep(2); display_autobackup_menu(chat_id, msg_id_to_edit)
 
-    # Handle Restore File Input
     elif state_info['state'] == 'awaiting_restore_file' and message.content_type == 'document':
         if not message.document.file_name.endswith('.tar.gz'):
             update_display(chat_id, msg_id_to_edit, f"{EMOJI['ERROR']} فایل نامعتبر است. لطفاً فایل `.tar.gz` ارسال کنید.", None)
@@ -234,7 +231,7 @@ def handle_stateful_messages(message):
             return
 
         update_display(chat_id, msg_id_to_edit, f"{EMOJI['WAIT']} در حال دانلود فایل...", None)
-        restore_file_path = os.path.join("/tmp", f"restore_{int(time.time())}.tar.gz")
+        restore_file_path = os.path.join(tempfile.gettempdir(), f"restore_{int(time.time())}.tar.gz")
         try:
             file_info = bot.get_file(message.document.file_id)
             downloaded_file = bot.download_file(file_info.file_path)
@@ -244,17 +241,16 @@ def handle_stateful_messages(message):
             success, output, duration = run_main_script(['do-restore', restore_file_path])
             if success:
                 update_bot_state('last_backup_time', 'هیچوقت (سیستم ریستور شده)')
-                result_text = f"{EMOJI['SUCCESS']} *ریستور کامل شد!*\nسیستم با موفقیت بازیابی و ری‌استارت شد. `({duration}s)`"
+                result_text = f"{EMOJI['SUCCESS']} *ریستور کامل شد!* `({duration}s)`"
             else:
-                result_text = f"{EMOJI['ERROR']} *ریستور ناموفق بود!*\n```{output}```"
+                result_text = f"{EMOJI['ERROR']} *ریستور ناموفق بود!* `({duration}s)`\n```{output}```"
             update_display(chat_id, msg_id_to_edit, result_text, None)
             time.sleep(4); display_main_menu(chat_id, msg_id_to_edit)
         finally:
             if os.path.exists(restore_file_path): os.remove(restore_file_path)
 
-# --- Bot Execution ---
 if __name__ == '__main__':
-    logger.info(f"Starting Bot v7.1 (Hybrid) for Admin ID: {ADMIN_CHAT_ID}...")
+    logger.info(f"Starting Bot v7.1.1 for Admin ID: {ADMIN_CHAT_ID}...")
     while True:
         try:
             bot.infinity_polling(timeout=120, logger_level=logging.WARNING)
