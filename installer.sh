@@ -13,8 +13,9 @@ VENV_DIR="venv"
 LAUNCHER_NAME="hexbackup-panel"
 SERVICE_NAME="marzban_bot.service"
 REQUIREMENTS_FILE="requirements.txt"
-PANEL_SCRIPT_NAME="marzban_panel.py"
-BOT_SCRIPT_NAME="marzban_bot.py"
+GITHUB_USER="HEXMOSTAFA"
+REPO_NAME="hexbackup"
+BRANCH="main"
 
 C_RESET='\e[0m'
 C_RED='\e[1;31m'
@@ -121,7 +122,7 @@ install() {
     print_msg "$C_YELLOW" "▶ Downloading scripts from GitHub..."
     for file in "$PANEL_SCRIPT_NAME" "$BOT_SCRIPT_NAME" "$REQUIREMENTS_FILE"; do
         print_msg "$C_CYAN" "  - Downloading ${file}..."
-        curl -sSL -o "${INSTALL_DIR}/${file}" "https://raw.githubusercontent.com/HEXMOSTAFA/hexbackup/main/${file}"
+        curl -sSL -o "${INSTALL_DIR}/${file}" "https://raw.githubusercontent.com/${GITHUB_USER}/${REPO_NAME}/${BRANCH}/${file}"
         if [ ! -s "${INSTALL_DIR}/${file}" ]; then
             print_msg "$C_RED" "❌ Failed to download ${file}."
             exit 1
