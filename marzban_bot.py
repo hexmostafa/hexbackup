@@ -2,7 +2,7 @@
 # =================================================================
 # Marzban Professional Control Bot
 # Creator: @HEXMOSTAFA
-# Version: 7.1.1 (Clean & Optimized)
+# Version: 7.1.2 (Clean & Optimized & Final)
 # =================================================================
 import os
 import json
@@ -11,10 +11,12 @@ import logging
 import time
 from datetime import datetime
 from typing import Tuple, List, Optional
+import tempfile # <--- این خط اضافه شد
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from telebot.util import quick_markup
 
+# --- Global Configurations & Emojis ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 MAIN_PANEL_SCRIPT = os.path.join(SCRIPT_DIR, "marzban_panel.py")
@@ -28,6 +30,7 @@ EMOJI = {
     "CLOCK": "⏱️", "CONFIRM": "👍", "TOGGLE_ON": "🟢", "TOGGLE_OFF": "🔴"
 }
 
+# --- Logging & Config/State Loading ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', handlers=[logging.FileHandler(LOG_FILE, encoding='utf-8'), logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,7 @@ def get_bot_state() -> dict:
         with open(BOT_STATE_FILE, 'r') as f: return json.load(f)
     except (json.JSONDecodeError, FileNotFoundError): return {}
 
+# --- Core Helper Functions ---
 def run_main_script(args: List[str]) -> Tuple[bool, str, str]:
     python_executable = subprocess.run(['which', 'python3'], capture_output=True, text=True).stdout.strip() or "python3"
     venv_python = os.path.join(SCRIPT_DIR, 'venv', 'bin', 'python3')
@@ -78,12 +82,14 @@ def admin_only(func):
         return func(message_or_call)
     return wrapper
 
+# --- UI Engine ---
 def update_display(chat_id: int, message_id: int, text: str, markup: Optional[InlineKeyboardMarkup] = None):
     try:
         bot.edit_message_text(text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown")
     except telebot.apihelper.ApiTelegramException as e:
         if 'message is not modified' not in e.description: logger.error(f"Failed to update display: {e}")
 
+# --- Keyboard Definitions ---
 def main_menu_keyboard():
     return quick_markup({
         f"{EMOJI['BACKUP']} بکاپ فوری": {'callback_data': "do_backup"},
@@ -114,12 +120,13 @@ def autobackup_menu_keyboard():
 def restore_confirmation_keyboard():
     return quick_markup({
         f"{EMOJI['DANGER']} بله، ریستور انجام شود": {'callback_data': "restore_confirm"},
-        f"{{EMOJI['BACK']}} انصراف": {'callback_data': "main_menu"},
+        f"{EMOJI['BACK']}} انصراف": {'callback_data': "main_menu"},
     }, row_width=1)
 
 def settings_info_keyboard():
-    return quick_markup({f"{{EMOJI['BACK']}} بازگشت به منوی اصلی": {'callback_data': "main_menu"}}, row_width=1)
+    return quick_markup({f"{EMOJI['BACK']} بازگشت به منوی اصلی": {'callback_data': "main_menu"}}, row_width=1)
 
+# --- UI View Functions ---
 def display_main_menu(chat_id: int, message_id: int):
     bot_state = get_bot_state()
     last_backup = bot_state.get('last_backup_time', 'هیچوقت')
@@ -144,6 +151,7 @@ def display_settings_info_view(chat_id: int, message_id: int):
     text = f"{EMOJI['SETTINGS']} *تنظیمات و اطلاعات*\n\nاین اطلاعات از فایل `config.json` خوانده می‌شود.\n\n```json\n{config_text}\n```"
     update_display(chat_id, message_id, text, settings_info_keyboard())
 
+# --- Message & Callback Handlers ---
 @bot.message_handler(commands=['start'])
 @admin_only
 def handle_start(message):
@@ -168,7 +176,7 @@ def handle_callbacks(call):
             update_bot_state('last_backup_time', datetime.utcnow().isoformat())
             result_text = f"{EMOJI['SUCCESS']} *بکاپ کامل شد!* `({duration} ثانیه)`"
         else:
-            result_text = f"{EMOJI['ERROR']} *عملیات ناموفق بود!*\n```{output}```"
+            result_text = f"{EMOJI['ERROR']} *عملیات ناموفق بود!* `({duration}s)`\n```{output}```"
         update_display(chat_id, msg_id, result_text, None)
         time.sleep(3); display_main_menu(chat_id, msg_id)
 
@@ -250,7 +258,7 @@ def handle_stateful_messages(message):
             if os.path.exists(restore_file_path): os.remove(restore_file_path)
 
 if __name__ == '__main__':
-    logger.info(f"Starting Bot v7.1.1 for Admin ID: {ADMIN_CHAT_ID}...")
+    logger.info(f"Starting Bot v7.1.2 for Admin ID: {ADMIN_CHAT_ID}...")
     while True:
         try:
             bot.infinity_polling(timeout=120, logger_level=logging.WARNING)
