@@ -4,9 +4,6 @@
 # HexBackup | Marzban Backup Tool Installer/Uninstaller
 # Creator: @HEXMOSTAFA
 # Version: 2.2.0 (Stable & Robust)
-#
-# This script installs or uninstalls the HexBackup tool,
-# sets up a virtual environment, and creates a system-wide command.
 # =================================================================
 
 set -e
@@ -123,18 +120,15 @@ install() {
     echo
     print_msg "$C_YELLOW" "▶ Downloading scripts and requirements from GitHub..."
     
-    # Download script files
-    print_msg "$C_CYAN" "  - Downloading marzban_panel.py..."
-    curl -sSL -o "${INSTALL_DIR}/marzban_panel.py" "https://raw.githubusercontent.com/HEXMOSTAFA/hexbackup/main/marzban_panel.py"
-    print_msg "$C_CYAN" "  - Downloading marzban_bot.py..."
-    curl -sSL -o "${INSTALL_DIR}/marzban_bot.py" "https://raw.githubusercontent.com/HEXMOSTAFA/hexbackup/main/marzban_bot.py"
-    print_msg "$C_CYAN" "  - Downloading requirements.txt..."
-    curl -sSL -o "${INSTALL_DIR}/requirements.txt" "https://raw.githubusercontent.com/HEXMOSTAFA/hexbackup/main/requirements.txt"
-
-    if [ ! -s "${INSTALL_DIR}/marzban_panel.py" ] || [ ! -s "${INSTALL_DIR}/marzban_bot.py" ] || [ ! -s "${INSTALL_DIR}/requirements.txt" ]; then
-        print_msg "$C_RED" "❌ Failed to download one or more files. Please check your internet connection or the repository URL."
-        exit 1
-    fi
+    local files_to_download=("marzban_panel.py" "marzban_bot.py" "requirements.txt")
+    for file in "${files_to_download[@]}"; do
+        print_msg "$C_CYAN" "  - Downloading ${file}..."
+        curl -sSL -o "${INSTALL_DIR}/${file}" "https://raw.githubusercontent.com/${GITHUB_USER}/${REPO_NAME}/${BRANCH}/${file}"
+        if [ ! -s "${INSTALL_DIR}/${file}" ]; then
+            print_msg "$C_RED" "❌ Failed to download ${file}."
+            exit 1
+        fi
+    done
 
     chmod +x "${INSTALL_DIR}"/*.py
     print_msg "$C_GREEN" "✔ Scripts downloaded successfully."
