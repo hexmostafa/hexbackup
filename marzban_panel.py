@@ -2,7 +2,7 @@
 # =================================================================
 # Marzban Complete Backup & Restore Panel
 # Creator: @HEXMOSTAFA
-# Version: 5.0 (Clean & Optimized for Telegram Bot Integration)
+# Version: 5.1 (Automatic .env Password Detection)
 # =================================================================
 
 import os
@@ -30,6 +30,7 @@ except ImportError:
     print("FATAL ERROR: 'rich' library is not installed. Please run 'pip3 install rich'.")
     sys.exit(1)
 
+# --- Global Configuration ---
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 FILES_TO_BACKUP = ["/var/lib/marzban", "/opt/marzban"]
@@ -40,7 +41,9 @@ MARZBAN_SERVICE_PATH = "/opt/marzban"
 LOG_FILE = os.path.join(SCRIPT_DIR, "marzban_backup.log")
 DB_BACKUP_DIR_NAME = "db_dumps"
 TG_BOT_FILE_NAME = "marzban_bot.py"
+DOTENV_PATH = os.path.join(MARZBAN_SERVICE_PATH, ".env")
 
+# --- Setup Logging ---
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -51,15 +54,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# --- Rich Console Setup ---
 custom_theme = Theme({
     "info": "cyan", "success": "bold green", "warning": "bold yellow",
     "danger": "bold red", "header": "bold white on blue", "menu": "bold yellow", "prompt": "bold magenta"
 })
 console = Console(theme=custom_theme)
 
+# =================================================================
+# HELPER FUNCTIONS
+# =================================================================
+
 def show_header():
     console.clear()
-    header_text = Text("Marzban Complete Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 5.0", justify="center", style="header")
+    header_text = Text("Marzban Complete Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 5.1", justify="center", style="header")
     console.print(Panel(header_text, style="blue", border_style="info"))
     console.print()
 
@@ -84,6 +92,21 @@ def load_config_file() -> Optional[Dict[str, Any]]:
         log_message("Invalid config file format. It will be recreated.", "danger")
         return None
 
+def find_dotenv_password() -> Optional[str]:
+    if not os.path.exists(DOTENV_PATH):
+        return None
+    try:
+        with open(DOTENV_PATH, 'r') as f:
+            for line in f:
+                if line.strip().startswith('MYSQL_ROOT_PASSWORD='):
+                    return line.strip().split('=', 1)[1]
+                if line.strip().startswith('MARIADB_ROOT_PASSWORD='):
+                    return line.strip().split('=', 1)[1]
+        return None
+    except Exception as e:
+        log_message(f"Error reading .env file: {e}", "danger")
+        return None
+
 def get_config(ask_telegram: bool = False, ask_database: bool = False, ask_interval: bool = False) -> Dict[str, Any]:
     config = load_config_file() or {"telegram": {}, "database": {}}
     
@@ -95,8 +118,20 @@ def get_config(ask_telegram: bool = False, ask_database: bool = False, ask_inter
         if find_database_container():
             console.print(Panel("Database Credentials", style="info"))
             config.setdefault('database', {})
-            config["database"]['user'] = Prompt.ask("[prompt]Enter the Database Username[/prompt]", default=config.get("database", {}).get('user', 'root'))
-            config["database"]['password'] = Prompt.ask("[prompt]Enter the database password[/prompt]", password=True)
+            
+            found_password = find_dotenv_password()
+            if found_password:
+                console.print(f"[info]Password found in .env file: [bold]{found_password}[/bold][/info]")
+                if Confirm.ask("[prompt]Do you want to use this password?[/prompt]", default=True):
+                    config["database"]['user'] = Prompt.ask("[prompt]Enter the Database Username[/prompt]", default=config.get("database", {}).get('user', 'root'))
+                    config["database"]['password'] = found_password
+                else:
+                    config["database"]['user'] = Prompt.ask("[prompt]Enter the Database Username[/prompt]", default=config.get("database", {}).get('user', 'root'))
+                    config["database"]['password'] = Prompt.ask("[prompt]Enter the database password[/prompt]", password=True)
+            else:
+                log_message("Could not find password in .env file. Please enter manually.", "warning")
+                config["database"]['user'] = Prompt.ask("[prompt]Enter the Database Username[/prompt]", default=config.get("database", {}).get('user', 'root'))
+                config["database"]['password'] = Prompt.ask("[prompt]Enter the database password[/prompt]", password=True)
         else:
             log_message("No MySQL/MariaDB container found. Assuming SQLite. Skipping database credentials.", "warning")
             
@@ -143,6 +178,10 @@ def run_marzban_command(action: str) -> bool:
     except subprocess.CalledProcessError as e:
         log_message(f"Command failed: {e.stderr}", "danger")
         return False
+
+# =================================================================
+# CORE LOGIC: BACKUP, RESTORE, CRONJOB, BOT SETUP
+# =================================================================
 
 def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
     log_message("Starting full backup process...", "info")
