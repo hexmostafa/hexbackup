@@ -16,9 +16,6 @@ GITHUB_USER="HEXMOSTAFA"
 REPO_NAME="hexbackup"
 BRANCH="main"
 
-# اضافه کردن این خط برای تعریف نام فایل requirements
-REQUIREMENTS_FILE="requirements.txt"
-
 C_RESET='\e[0m'
 C_RED='\e[1;31m'
 C_GREEN='\e[1;32m'
@@ -138,7 +135,8 @@ install() {
     echo
     print_msg "$C_YELLOW" "▶ Setting up Python virtual environment..."
     python3 -m venv "${INSTALL_DIR}/${VENV_DIR}"
-    if ! "${INSTALL_DIR}/${VENV_DIR}/bin/pip" install -r "${INSTALL_DIR}/${REQUIREMENTS_FILE}"; then
+    # This is the corrected line: it explicitly references the requirements.txt file.
+    if ! "${INSTALL_DIR}/${VENV_DIR}/bin/pip" install -r "${INSTALL_DIR}/requirements.txt"; then
         print_msg "$C_RED" "❌ Failed to install Python libraries."
         exit 1
     fi
