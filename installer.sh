@@ -16,6 +16,9 @@ GITHUB_USER="HEXMOSTAFA"
 REPO_NAME="hexbackup"
 BRANCH="main"
 
+# اضافه کردن این خط برای تعریف نام فایل requirements
+REQUIREMENTS_FILE="requirements.txt"
+
 C_RESET='\e[0m'
 C_RED='\e[1;31m'
 C_GREEN='\e[1;32m'
