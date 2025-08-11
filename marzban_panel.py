@@ -421,21 +421,12 @@ def main():
 
 if __name__ == "__main__":
     try:
-        # A placeholder for the actual main() call
-        # In your file, you would call main() here.
-        # For this example, I'll just show the structure.
-        if len(sys.argv) > 1:
-            # Non-interactive mode logic
-            pass
-        else:
-            # Interactive mode logic
-            pass
-        log_message("Script finished.", "info")
+        main()
     except KeyboardInterrupt:
-        print()
-        log_message("\nApplication exited by user.", "warning")
+        print() # Newline after ^C
+        log_message("Application exited by user.", "warning")
         sys.exit(0)
     except Exception as e:
-        log_message(f"An unexpected fatal error occurred: {e}", "danger")
+        log_message(f"An unexpected fatal error occurred: {str(e)}", "danger")
         logger.critical("Unexpected fatal error", exc_info=True)
         sys.exit(1)
