@@ -3,7 +3,7 @@
 # HexBackup | Marzban Backup & Restore Panel - Finalized Version
 # Creator: @HEXMOSTAFA
 # Re-engineered & Optimized by AI Assistant
-# Version: 14.5 (Correct Docker Service Handling)
+# Version: 14.6 (Correct Restore Order of Operations)
 # =================================================================
 
 import os
@@ -39,7 +39,7 @@ PATHS_TO_BACKUP = {
     "var_lib_marzban": Path("/var/lib/marzban"),
     "opt_marzban": Path("/opt/marzban")
 }
-DB_SERVICE_NAME = "mysql"  # <<< The service name in docker-compose.yml
+DB_SERVICE_NAME = "mysql"
 EXCLUDED_DATABASES = ['information_schema', 'mysql', 'performance_schema', 'sys']
 CRON_JOB_IDENTIFIER = "# HEXMOSTAFA_MARZBAN_BACKUP_JOB"
 MARZBAN_SERVICE_PATH = Path("/opt/marzban")
@@ -71,7 +71,7 @@ console = Console(theme=custom_theme)
 
 def show_header():
     console.clear()
-    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 14.5", justify="center", style="header")
+    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 14.6", justify="center", style="header")
     console.print(Panel(header_text, style="blue", border_style="info"))
     console.print()
 
@@ -207,9 +207,8 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
             db_backup_path = backup_temp_dir / "db_dumps"
             db_backup_path.mkdir()
             try:
-                # <<< CHANGE: Use the defined service name for docker compose commands >>>
                 run_marzban_command(f"up -d {DB_SERVICE_NAME}")
-                sleep(10) # Give DB time to start
+                sleep(10)
                 list_dbs_cmd = f"docker exec -i {container_name} mysql -u{db_config['user']} -p'{db_config['password']}' -e 'SHOW DATABASES;'"
                 result = subprocess.run(list_dbs_cmd, shell=True, check=True, capture_output=True, text=True)
                 databases = [db for db in result.stdout.strip().split('\n') if db not in EXCLUDED_DATABASES and db != 'Database']
@@ -258,22 +257,22 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
             os.remove(final_archive_path)
             log_message("Removed local cron backup file.", "info")
 
+# <<< CHANGE START: This function is now simpler, as the caller handles starting the service >>>
 def _restore_database_from_dump(db_config: Dict[str, str], db_dump_path: Path) -> bool:
-    container_name = find_database_container()
-    if not container_name:
-        log_message("Could not identify database container. Skipping DB restore.", "danger")
-        return False
+    """Assumes the DB service is running and imports the SQL files."""
     try:
         sql_files = sorted([f for f in db_dump_path.iterdir() if f.suffix == '.sql'])
         if not sql_files:
             log_message("No database dumps found to restore.", "warning")
             return True
-        # <<< CHANGE: Use the defined service name for docker compose commands >>>
-        log_message(f"Starting database service '{DB_SERVICE_NAME}' for restore...", "info")
-        if not run_marzban_command(f"up -d {DB_SERVICE_NAME}"):
-            raise Exception("Could not start the database container.")
-        log_message("Waiting for DB to initialize...", "info")
-        sleep(15)
+
+        # Find the name of the newly created container
+        container_name = find_database_container()
+        if not container_name:
+            log_message("Could not find the running database container after 'up' command.", "danger")
+            return False
+        
+        log_message(f"Found running container '{container_name}'. Importing data...", "info")
         for sql_file in sql_files:
             db = sql_file.stem
             log_message(f"Restoring database: {db}", "info")
@@ -281,25 +280,31 @@ def _restore_database_from_dump(db_config: Dict[str, str], db_dump_path: Path) -
             subprocess.run(drop_cmd, shell=True, check=True, executable='/bin/bash')
             import_cmd = f"docker exec -i {container_name} mysql -u{db_config['user']} -p'{db_config['password']}' {db} < {str(sql_file)}"
             subprocess.run(import_cmd, shell=True, check=True, executable='/bin/bash')
+        
         log_message("✅ Database restore completed successfully.", "success")
         return True
     except Exception as e:
         log_message(f"An unexpected error occurred during database restore: {e}", "danger")
         logger.exception("DB restore failed")
         return False
+# <<< CHANGE END >>>
 
+# <<< CHANGE START: The order of operations is now corrected >>>
 def _perform_restore(archive_path: Path, config: Dict[str, Any]):
     temp_dir = Path(tempfile.mkdtemp(prefix="restore_"))
     try:
         with console.status("[info]Stopping all Marzban services...[/info]", spinner="dots"):
             run_marzban_command("down")
         log_message("All Marzban services stopped.", "success")
+
         log_message(f"Extracting backup file '{archive_path}'...", "info")
         with tarfile.open(archive_path, "r:gz") as tar:
             tar.extractall(path=temp_dir)
         log_message("Extraction completed successfully.", "success")
+
         fs_restore_path = temp_dir / "filesystem"
         db_dump_path = temp_dir / "db_dumps"
+
         if fs_restore_path.exists():
             log_message("Restoring Marzban configuration files...", "info")
             for unique_name, destination_path in PATHS_TO_BACKUP.items():
@@ -310,20 +315,29 @@ def _perform_restore(archive_path: Path, config: Dict[str, Any]):
                         shutil.rmtree(destination_path)
                     log_message(f"Restoring '{unique_name}' to '{destination_path}'", "info")
                     shutil.copytree(source_path, destination_path)
-                else:
-                    log_message(f"Did not find '{unique_name}' in backup. Skipping restore.", "warning")
             log_message("Filesystem restore completed successfully.", "success")
         else:
             log_message("Filesystem data not found in backup. Skipping.", "warning")
+
+        # --- Corrected DB Restore Logic ---
         if db_dump_path.is_dir() and any(db_dump_path.iterdir()):
             db_config = config.get('database')
             if db_config:
-                if not _restore_database_from_dump(db_config, db_dump_path):
-                    log_message("Database restore failed. The panel may not work correctly.", "danger")
+                # 1. Start the DB service FIRST to create the container
+                log_message(f"Starting database service '{DB_SERVICE_NAME}' for restore...", "info")
+                if run_marzban_command(f"up -d {DB_SERVICE_NAME}"):
+                    log_message("Waiting for DB to initialize...", "info")
+                    sleep(15)
+                    # 2. THEN, call the function to import data
+                    if not _restore_database_from_dump(db_config, db_dump_path):
+                        log_message("Database restore failed. The panel may not work correctly.", "danger")
+                else:
+                    log_message(f"Could not start the '{DB_SERVICE_NAME}' service. Skipping DB restore.", "danger")
             else:
                 log_message("DB config not found. Skipping restore of database dumps.", "warning")
         else:
             log_message("No database dumps found in backup. Skipping.", "warning")
+
     except Exception as e:
         log_message(f"A critical error occurred during restore: {e}", "danger")
         logger.exception("Restore process failed")
@@ -333,6 +347,7 @@ def _perform_restore(archive_path: Path, config: Dict[str, Any]):
         log_message("Starting all Marzban services...", "info")
         run_marzban_command("up -d")
         console.print(Panel("[bold green]✅ Restore process finished. Please check your Marzban panel.[/bold green]"))
+# <<< CHANGE END >>>
 
 def restore_flow():
     show_header()
@@ -465,8 +480,7 @@ def main():
                 log_message("Goodbye!", "info")
                 break
             Prompt.ask("\n[prompt]Press Enter to return to the main menu...[/prompt]")
-        except (TypeError) as e:
-            # Catching the specific 'int' object has no attribute 'name' error
+        except TypeError as e:
             log_message(f"A recoverable error occurred: {e}. Please try again.", "warning")
             Prompt.ask("\n[prompt]Press Enter to continue...[/prompt]")
 
