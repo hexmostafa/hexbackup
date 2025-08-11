@@ -3,7 +3,7 @@
 # HexBackup | Marzban Backup & Restore Panel - Finalized Version
 # Creator: @HEXMOSTAFA
 # Re-engineered & Optimized by AI Assistant
-# Version: 14.8 (Correct Database Restore Logic)
+# Version: 14.9 (Intelligent Bot Setup)
 # =================================================================
 
 import os
@@ -71,7 +71,7 @@ console = Console(theme=custom_theme)
 
 def show_header():
     console.clear()
-    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 14.8", justify="center", style="header")
+    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 14.9", justify="center", style="header")
     console.print(Panel(header_text, style="blue", border_style="info"))
     console.print()
 
@@ -90,7 +90,7 @@ def load_config_file() -> Optional[Dict[str, Any]]:
     if not CONFIG_FILE.exists():
         return None
     try:
-        with open(CONFIG_FILE, 'r') as f:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
     except json.JSONDecodeError:
         log_message("Invalid config file format. It will be recreated.", "danger")
@@ -100,7 +100,7 @@ def find_dotenv_password() -> Optional[str]:
     if not DOTENV_PATH.exists():
         return None
     try:
-        with open(DOTENV_PATH, 'r') as f:
+        with open(DOTENV_PATH, 'r', encoding='utf-8') as f:
             for line in f:
                 if line.strip().startswith(('MYSQL_ROOT_PASSWORD=', 'MARIADB_ROOT_PASSWORD=')):
                     return line.strip().split('=', 1)[1]
@@ -149,7 +149,7 @@ def get_config(ask_telegram: bool = False, ask_database: bool = False, ask_inter
         config.setdefault('telegram', {})
         config["telegram"]['backup_interval'] = Prompt.ask("[prompt]Enter auto backup interval in minutes[/prompt]", default=str(config.get("telegram", {}).get('backup_interval', '60')))
     try:
-        with open(CONFIG_FILE, 'w') as f:
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=4)
         if any([ask_telegram, ask_database, ask_interval]):
             console.print(f"[success]Settings saved to '{CONFIG_FILE}'[/success]")
@@ -257,66 +257,55 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
             os.remove(final_archive_path)
             log_message("Removed local cron backup file.", "info")
 
-# <<< CHANGE START: This entire function has been rewritten to match the old script's successful logic >>>
 def _perform_restore(archive_path: Path, config: Dict[str, Any]):
     temp_dir = Path(tempfile.mkdtemp(prefix="restore_"))
     try:
-        # --- 1. Unzip backup ---
         log_message("Verifying and extracting backup file...", "info")
         with tarfile.open(archive_path, "r:gz") as tar:
             tar.extractall(path=temp_dir)
         log_message("Backup extracted successfully.", "success")
-
-        # --- 2. Stop services ---
+        
         with console.status("[info]Stopping all Marzban services...[/info]", spinner="dots"):
-            if not run_marzban_command("down"):
-                raise Exception("Could not stop Marzban services.")
+            if not run_marzban_command("down"): raise Exception("Could not stop Marzban services.")
         log_message("All Marzban services stopped.", "success")
         
-        # --- 3. Restore filesystem ---
         fs_restore_path = temp_dir / "filesystem"
         if fs_restore_path.exists():
             log_message("Restoring configuration files...", "info")
-            # Restore /opt/marzban first
             if (fs_restore_path / "opt_marzban").exists():
                 shutil.copytree(fs_restore_path / "opt_marzban", MARZBAN_SERVICE_PATH, dirs_exist_ok=True)
                 log_message(f"Restored '{MARZBAN_SERVICE_PATH}'.", "success")
-            # Restore /var/lib/marzban
             if (fs_restore_path / "var_lib_marzban").exists():
                 shutil.copytree(fs_restore_path / "var_lib_marzban", Path("/var/lib/marzban"), dirs_exist_ok=True)
                 log_message(f"Restored '/var/lib/marzban'.", "success")
-        else:
-            log_message("Filesystem data not found in backup. Skipping.", "warning")
-
-        # --- 4. CRITICAL STEP: Recreate MySQL data directory to force initialization ---
+        
         mysql_data_dir = Path("/var/lib/marzban/mysql")
-        log_message(f"Clearing MySQL data directory ({mysql_data_dir})...", "info")
-        if mysql_data_dir.exists():
-            shutil.rmtree(mysql_data_dir)
+        log_message(f"Clearing MySQL data directory ({mysql_data_dir}) for clean initialization...", "info")
+        if mysql_data_dir.exists(): shutil.rmtree(mysql_data_dir)
         mysql_data_dir.mkdir(parents=True, exist_ok=True)
-        log_message("MySQL data directory recreated for a clean initialization.", "success")
-
-        # --- 5. Start all services to initialize the database ---
+        
         with console.status("[info]Starting all Marzban services to initialize DB...[/info]", spinner="dots"):
-            if not run_marzban_command("up -d"):
-                raise Exception("Could not start Marzban services.")
+            if not run_marzban_command("up -d"): raise Exception("Could not start Marzban services.")
         log_message("All Marzban services started.", "success")
         log_message("Waiting for MySQL service to stabilize (30 seconds)...", "info")
         sleep(30)
         
-        # --- 6. Import the database dump ---
         db_restore_path = temp_dir / "db_dumps"
-        sql_file_path = db_restore_path / "marzban.sql" # Assuming the main db is 'marzban'
-        
-        if sql_file_path.exists():
+        # Find any .sql file, but prefer 'marzban.sql'
+        sql_files = list(db_restore_path.glob("*.sql"))
+        sql_file_to_restore = db_restore_path / "marzban.sql"
+        if not sql_file_to_restore.exists() and sql_files:
+            sql_file_to_restore = sql_files[0]
+
+        if sql_file_to_restore.exists():
             container_name = find_database_container()
             db_user = config['database']['user']
             db_pass = config['database']['password']
-            if not container_name:
-                raise Exception("Could not find database container after restart.")
+            if not container_name: raise Exception("Could not find database container after restart.")
             
-            log_message(f"Importing data into database '{DB_SERVICE_NAME}'...", "info")
-            restore_cmd = f"cat {sql_file_path} | docker exec -i {container_name} mysql -u{db_user} -p'{db_pass}' {DB_SERVICE_NAME}"
+            db_name_to_restore = sql_file_to_restore.stem
+            log_message(f"Importing data into database '{db_name_to_restore}'...", "info")
+            restore_cmd = f"cat {sql_file_to_restore} | docker exec -i {container_name} mysql -u{db_user} -p'{db_pass}' {db_name_to_restore}"
             
             result = subprocess.run(restore_cmd, shell=True, capture_output=True, text=True)
             if result.returncode == 0:
@@ -324,7 +313,7 @@ def _perform_restore(archive_path: Path, config: Dict[str, Any]):
             else:
                 raise Exception(f"Database import failed: {result.stderr}")
         else:
-            log_message("marzban.sql not found in backup. Skipping database data import.", "warning")
+            log_message("No .sql file found in backup. Skipping database data import.", "warning")
 
         console.print(Panel("[bold green]✅ Restore process finished. Please check your Marzban panel.[/bold green]"))
 
@@ -336,7 +325,6 @@ def _perform_restore(archive_path: Path, config: Dict[str, Any]):
     finally:
         log_message("Cleaning up temporary files...", "info")
         shutil.rmtree(temp_dir, ignore_errors=True)
-# <<< CHANGE END >>>
 
 def restore_flow():
     show_header()
@@ -355,21 +343,29 @@ def restore_flow():
         return
     _perform_restore(archive_path, config)
 
+# <<< CHANGE START: This function is now more intelligent >>>
 def setup_bot_flow():
     show_header()
     console.print(Panel("Telegram Bot Setup", style="info"))
-    config = get_config(ask_telegram=True)
-    if not config.get('telegram', {}).get('bot_token'):
-        log_message("Bot token is required.", "danger")
+    console.print("[info]For the bot to function correctly, especially for backups, it needs access to both Telegram and Database credentials.[/info]")
+    
+    # Ask for both Telegram and Database credentials
+    config = get_config(ask_telegram=True, ask_database=True)
+    
+    if not all([config.get('telegram', {}).get('bot_token'), config.get('telegram', {}).get('admin_chat_id'), config.get('database', {}).get('password')]):
+        log_message("Bot token, Admin Chat ID, and Database password are all required. Setup aborted.", "danger")
         return
+        
     bot_script_path = SCRIPT_DIR / TG_BOT_FILE_NAME
     if not bot_script_path.exists():
         log_message(f"Bot script '{TG_BOT_FILE_NAME}' not found.", "danger")
         return
+        
     try:
         log_message("Installing required Python libraries for the bot...", "info")
         pip_executable = sys.executable.replace('python3', 'pip3')
         subprocess.check_call([pip_executable, "install", "pyTelegramBotAPI"])
+        
         service_file_path = Path("/etc/systemd/system/marzban_bot.service")
         service_content = f"""[Unit]
 Description=HexBackup Telegram Bot for Marzban
@@ -383,12 +379,14 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 """
-        with open(service_file_path, "w") as f:
+        with open(service_file_path, "w", encoding='utf-8') as f:
             f.write(service_content)
+            
         subprocess.run(['systemctl', 'daemon-reload'], check=True)
         with console.status("[bold green]Activating Telegram bot service...[/bold green]"):
             subprocess.run(['systemctl', 'enable', '--now', 'marzban_bot.service'], check=True)
         sleep(3)
+        
         result = subprocess.run(['systemctl', 'is-active', 'marzban_bot.service'], capture_output=True, text=True)
         if result.stdout.strip() == "active":
             console.print("[bold green]✅ Telegram bot service is running successfully.[/bold green]")
@@ -396,25 +394,30 @@ WantedBy=multi-user.target
             console.print("[bold red]❌ The bot service failed to start. Check logs with 'journalctl -u marzban_bot'.[/bold red]")
     except Exception as e:
         console.print(f"[bold red]❌ An unexpected error occurred: {e}[/bold red]")
+# <<< CHANGE END >>>
+
 
 def setup_cronjob_flow():
     show_header()
     console.print(Panel("Automatic Backup Setup (Cronjob)", style="info"))
     config = load_config_file()
-    if not config or not config.get("telegram", {}).get('bot_token'):
-        log_message("Telegram Bot is not configured. Please set it up first.", "danger")
+    if not all([config, config.get("telegram", {}).get('bot_token'), config.get("database", {}).get('password')]):
+        log_message("Bot and Database are not fully configured. Please run 'Setup Telegram Bot' (Option 3) first.", "danger")
         return
-    config = get_config(ask_interval=True, ask_database=True)
+        
+    config = get_config(ask_interval=True)
     interval = config.get("telegram", {}).get('backup_interval', '60')
     if not str(interval).isdigit() or int(interval) <= 0:
         log_message("Invalid backup interval.", "danger")
         return
+        
     python_executable = sys.executable
     script_path = Path(__file__).resolve()
     cron_command = f"*/{interval} * * * * {str(python_executable)} {str(script_path)} run-backup > /dev/null 2>&1"
     if not Confirm.ask(f"Add this to crontab?\n[info]{cron_command}[/info]"):
         log_message("Crontab setup cancelled.", "warning")
         return
+        
     try:
         current_crontab = subprocess.run(['crontab', '-l'], capture_output=True, text=True, check=False).stdout
         new_lines = [line for line in current_crontab.splitlines() if CRON_JOB_IDENTIFIER not in line]
