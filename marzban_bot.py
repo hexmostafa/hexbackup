@@ -3,7 +3,7 @@
 # Marzban Holographic Control Bot - Refactored
 # Creator: @HEXMOSTAFA
 # Re-engineered by AI Assistant
-# Version: 9.3 (Stable Message Editing & Final)
+# Version: 9.4 (Stable & Final)
 # =================================================================
 import os
 import sys
@@ -121,23 +121,25 @@ class MarzbanControlBot:
         @self.admin_only
         async def master_callback_handler(call):
             await self.bot.answer_callback_query(call.id)
+            chat_id, msg_id = call.message.chat.id, call.message.message_id
+            
             action_map = {
-                self.CB_MAIN_MENU: lambda c: self.display_main_menu(c.message.chat.id, c.message.message_id),
-                self.CB_DO_BACKUP: self.handle_backup,
-                self.CB_RESTORE_START: self.handle_restore_start,
-                self.CB_RESTORE_CONFIRM: self.handle_restore_confirm,
-                self.CB_AUTOBACKUP_MENU: self.display_autobackup_menu,
-                self.CB_AUTOBACKUP_ENABLE: self.handle_autobackup_set_interval,
-                self.CB_AUTOBACKUP_DISABLE: self.handle_autobackup_disable,
-                self.CB_AUTOBACKUP_EDIT: self.handle_autobackup_set_interval,
-                self.CB_SYSTEM_STATUS: self.handle_system_status,
-                self.CB_LOGS_MENU: self.display_logs_menu,
-                self.CB_VIEW_BACKUP_LOG: lambda c: self.handle_view_log(c, LOG_FILE),
-                self.CB_VIEW_BOT_LOG: lambda c: self.handle_view_log(c, BOT_LOG_FILE),
+                self.CB_MAIN_MENU: lambda: self.display_main_menu(chat_id, msg_id),
+                self.CB_DO_BACKUP: lambda: self.handle_backup(chat_id, msg_id),
+                self.CB_RESTORE_START: lambda: self.handle_restore_start(chat_id, msg_id),
+                self.CB_RESTORE_CONFIRM: lambda: self.handle_restore_confirm(chat_id, msg_id),
+                self.CB_AUTOBACKUP_MENU: lambda: self.display_autobackup_menu(chat_id, msg_id),
+                self.CB_AUTOBACKUP_ENABLE: lambda: self.handle_autobackup_set_interval(chat_id, msg_id),
+                self.CB_AUTOBACKUP_DISABLE: lambda: self.handle_autobackup_disable(chat_id, msg_id),
+                self.CB_AUTOBACKUP_EDIT: lambda: self.handle_autobackup_set_interval(chat_id, msg_id),
+                self.CB_SYSTEM_STATUS: lambda: self.handle_system_status(chat_id, msg_id),
+                self.CB_LOGS_MENU: lambda: self.display_logs_menu(chat_id, msg_id),
+                self.CB_VIEW_BACKUP_LOG: lambda: self.handle_view_log(chat_id, msg_id, LOG_FILE),
+                self.CB_VIEW_BOT_LOG: lambda: self.handle_view_log(chat_id, msg_id, BOT_LOG_FILE),
             }
             handler = action_map.get(call.data)
             if handler:
-                await handler(call)
+                await handler()
 
         @self.bot.message_handler(content_types=['text', 'document'], func=lambda msg: self.conversational_states.get(msg.chat.id) is not None)
         @self.admin_only
@@ -149,11 +151,12 @@ class MarzbanControlBot:
             try: await self.bot.delete_message(chat_id, message.message_id)
             except Exception: pass
             
+            msg_id_to_edit = state_info['message_id']
             state = state_info['state']
             if state == 'awaiting_interval':
-                await self._process_interval_input(chat_id, state_info['message_id'], message.text)
+                await self._process_interval_input(chat_id, msg_id_to_edit, message.text)
             elif state == 'awaiting_restore_file':
-                await self._process_restore_file(message, state_info['message_id'])
+                await self._process_restore_file(message, msg_id_to_edit)
 
     def admin_only(self, func):
         async def wrapper(message_or_call):
@@ -222,40 +225,36 @@ class MarzbanControlBot:
         )
         await self._update_display(chat_id, message_id, text, self._get_main_menu_keyboard())
 
-    async def display_autobackup_menu(self, call):
-        chat_id, msg_id = call.message.chat.id, call.message.message.id
+    async def display_autobackup_menu(self, chat_id: int, message_id: int):
         config = self.state_manager.get_config()
         interval = config.get('telegram', {}).get('backup_interval')
         status = f"در حال حاضر بکاپ خودکار *فعال* است و هر `{interval}` دقیقه یکبار اجرا می‌شود." if interval else "بکاپ خودکار در حال حاضر *غیرفعال* است."
         text = f"{EMOJI['AUTO']} *مدیریت بکاپ خودکار*\n\n{status}\n\nاز دکمه‌های زیر برای مدیریت استفاده کنید."
-        await self._update_display(chat_id, msg_id, text, self._get_autobackup_menu_keyboard())
+        await self._update_display(chat_id, message_id, text, self._get_autobackup_menu_keyboard())
     
-    async def display_logs_menu(self, call):
-        chat_id, msg_id = call.message.chat.id, call.message.message.id
+    async def display_logs_menu(self, chat_id: int, message_id: int):
         text = f"{EMOJI['LOGS']} *مشاهده لاگ‌ها*\n\nکدام فایل لاگ را می‌خواهید مشاهده کنید؟ (نمایش ۲۰ خط آخر)"
         markup = quick_markup({
             "📋 لاگ پنل (Backup/Restore)": {'callback_data': self.CB_VIEW_BACKUP_LOG},
             "🤖 لاگ ربات (Bot)": {'callback_data': self.CB_VIEW_BOT_LOG},
             f"{EMOJI['BACK']} بازگشت": {'callback_data': self.CB_MAIN_MENU},
         }, row_width=1)
-        await self._update_display(chat_id, msg_id, text, markup)
+        await self._update_display(chat_id, message_id, text, markup)
         
     # --- Action Handlers ---
-    async def handle_backup(self, call):
-        chat_id, msg_id = call.message.chat.id, call.message.message_id
-        success, result, duration = await self.run_panel_script_streamed(['run-backup'], chat_id, msg_id)
+    async def handle_backup(self, chat_id: int, message_id: int):
+        success, result, duration = await self.run_panel_script_streamed(['run-backup'], chat_id, message_id)
         if success:
             self.state_manager.update_state('last_backup_time', datetime.utcnow().isoformat())
             result_text = f"{EMOJI['SUCCESS']} *بکاپ کامل شد!* `({duration} ثانیه)`"
         else:
             result_text = f"{EMOJI['ERROR']} *عملیات ناموفق بود!*\n`{result}`"
         
-        await self._update_display(chat_id, msg_id, result_text)
+        await self._update_display(chat_id, message_id, result_text)
         await asyncio.sleep(4)
-        await self.display_main_menu(chat_id, msg_id)
+        await self.display_main_menu(chat_id, message_id)
 
-    async def handle_restore_start(self, call):
-        chat_id, msg_id = call.message.chat.id, call.message.message_id
+    async def handle_restore_start(self, chat_id: int, message_id: int):
         text = (
             f"{EMOJI['DANGER']} *هشدار بسیار مهم*\n\n"
             "این عمل تمام اطلاعات فعلی شما را با فایل بکاپ *جایگزین* می‌کند. این عمل غیرقابل بازگشت است.\n\n"
@@ -265,21 +264,18 @@ class MarzbanControlBot:
             f"{EMOJI['DANGER']} بله، ریستور کن": {'callback_data': self.CB_RESTORE_CONFIRM},
             f"{EMOJI['BACK']} انصراف": {'callback_data': self.CB_MAIN_MENU},
         })
-        await self._update_display(chat_id, msg_id, text, markup)
+        await self._update_display(chat_id, message_id, text, markup)
         
-    async def handle_restore_confirm(self, call):
-        chat_id, msg_id = call.message.chat.id, call.message.message_id
-        self.conversational_states[chat_id] = {'state': 'awaiting_restore_file', 'message_id': msg_id}
-        await self._update_display(chat_id, msg_id, f"{EMOJI['INFO']} لطفاً فایل بکاپ با فرمت `.tar.gz` را ارسال کنید.")
+    async def handle_restore_confirm(self, chat_id: int, message_id: int):
+        self.conversational_states[chat_id] = {'state': 'awaiting_restore_file', 'message_id': message_id}
+        await self._update_display(chat_id, message_id, f"{EMOJI['INFO']} لطفاً فایل بکاپ با فرمت `.tar.gz` را ارسال کنید.")
 
-    async def handle_autobackup_set_interval(self, call):
-        chat_id, msg_id = call.message.chat.id, call.message.message_id
-        self.conversational_states[chat_id] = {'state': 'awaiting_interval', 'message_id': msg_id}
-        await self._update_display(chat_id, msg_id, f"{EMOJI['CLOCK']} لطفاً بازه زمانی بکاپ خودکار را به *دقیقه* وارد کنید (مثلا: `60`).")
+    async def handle_autobackup_set_interval(self, chat_id: int, message_id: int):
+        self.conversational_states[chat_id] = {'state': 'awaiting_interval', 'message_id': message_id}
+        await self._update_display(chat_id, message_id, f"{EMOJI['CLOCK']} لطفاً بازه زمانی بکاپ خودکار را به *دقیقه* وارد کنید (مثلا: `60`).")
         
-    async def handle_autobackup_disable(self, call):
-        chat_id, msg_id = call.message.chat.id, call.message.message_id
-        await self._update_display(chat_id, msg_id, f"{EMOJI['WAIT']} در حال غیرفعال‌سازی...")
+    async def handle_autobackup_disable(self, chat_id: int, message_id: int):
+        await self._update_display(chat_id, message_id, f"{EMOJI['WAIT']} در حال غیرفعال‌سازی...")
         
         config_data = self.state_manager.get_config()
         config_data.get('telegram', {}).pop('backup_interval', None)
@@ -288,13 +284,12 @@ class MarzbanControlBot:
         success, output, _ = await self._run_panel_script(['do-auto-backup-setup'])
         result_text = f"{EMOJI['SUCCESS']} بکاپ خودکار غیرفعال شد." if success else f"{EMOJI['ERROR']} خطا در به‌روزرسانی کرون‌جب:\n`{output}`"
         
-        await self._update_display(chat_id, msg_id, result_text)
+        await self._update_display(chat_id, message_id, result_text)
         await asyncio.sleep(2)
-        await self.display_autobackup_menu(call)
+        await self.display_autobackup_menu(chat_id, message_id)
         
-    async def handle_system_status(self, call):
-        chat_id, msg_id = call.message.chat.id, call.message.message_id
-        await self._update_display(chat_id, msg_id, f"{EMOJI['WAIT']} در حال دریافت اطلاعات سیستم...")
+    async def handle_system_status(self, chat_id: int, message_id: int):
+        await self._update_display(chat_id, message_id, f"{EMOJI['WAIT']} در حال دریافت اطلاعات سیستم...")
         
         try:
             tasks = [
@@ -318,11 +313,10 @@ class MarzbanControlBot:
             status_text = f"{EMOJI['ERROR']} *خطا در دریافت اطلاعات سیستم:*\n`{e}`"
 
         markup = quick_markup({f"{EMOJI['BACK']} بازگشت": {'callback_data': self.CB_MAIN_MENU}})
-        await self._update_display(chat_id, msg_id, status_text, markup)
+        await self._update_display(chat_id, message_id, status_text, markup)
     
-    async def handle_view_log(self, call, log_path: Path):
-        chat_id, msg_id = call.message.chat.id, call.message.message_id
-        await self._update_display(chat_id, msg_id, f"{EMOJI['WAIT']} در حال خواندن فایل لاگ...")
+    async def handle_view_log(self, chat_id: int, message_id: int, log_path: Path):
+        await self._update_display(chat_id, message_id, f"{EMOJI['WAIT']} در حال خواندن فایل لاگ...")
         
         try:
             if not log_path.exists():
@@ -341,7 +335,7 @@ class MarzbanControlBot:
             text = f"{EMOJI['ERROR']} *خطا در پردازش فایل لاگ:*\n`{e}`"
 
         markup = quick_markup({f"{EMOJI['BACK']} بازگشت": {'callback_data': self.CB_LOGS_MENU}})
-        await self._update_display(chat_id, msg_id, text, markup)
+        await self._update_display(chat_id, message_id, text, markup)
         
     async def _process_interval_input(self, chat_id: int, message_id: int, text_input: str):
         try:
@@ -359,17 +353,12 @@ class MarzbanControlBot:
             
             await self._update_display(chat_id, message_id, result_text)
             await asyncio.sleep(2)
-            # Recreate a fake call object to call the display menu
-            fake_message = telebot.types.Message(message_id=message_id, chat=telebot.types.Chat(id=chat_id, type='private'), date=0)
-            fake_call = telebot.types.CallbackQuery(id=0, from_user=None, data="", chat_instance="", json_string="", message=fake_message)
-            await self.display_autobackup_menu(fake_call)
+            await self.display_autobackup_menu(chat_id, message_id)
             
         except (ValueError, TypeError):
             await self._update_display(chat_id, message_id, f"{EMOJI['ERROR']} ورودی نامعتبر است. لطفاً فقط یک عدد صحیح مثبت وارد کنید.")
             await asyncio.sleep(3)
-            fake_message = telebot.types.Message(message_id=message_id, chat=telebot.types.Chat(id=chat_id, type='private'), date=0)
-            fake_call = telebot.types.CallbackQuery(id=0, from_user=None, data="", chat_instance="", json_string="", message=fake_message)
-            await self.display_autobackup_menu(fake_call)
+            await self.display_autobackup_menu(chat_id, message_id)
 
     async def _process_restore_file(self, message, msg_id_to_edit):
         chat_id = message.chat.id
@@ -389,8 +378,7 @@ class MarzbanControlBot:
                 downloaded_file = await self.bot.download_file(file_info.file_path)
                 temp_file.write(downloaded_file)
                 temp_file.flush()
-                
-                # <<< CHANGE: This function now receives chat_id and msg_id directly >>>
+
                 success, result, duration = await self.run_panel_script_streamed(['do-restore', str(restore_file_path)], chat_id, msg_id_to_edit)
                 
                 if success:
@@ -430,7 +418,6 @@ class MarzbanControlBot:
             error = stderr.decode('utf-8').strip() + "\n" + stdout.decode('utf-8').strip()
             return False, error.strip(), duration
             
-    # <<< CHANGE: Function signature updated to be more robust >>>
     async def run_panel_script_streamed(self, args: List[str], chat_id: int, message_id: int) -> Tuple[bool, str, str]:
         """Runs the panel script and streams live feedback (for long tasks)."""
         venv_python = SCRIPT_DIR / 'venv' / 'bin' / 'python3'
@@ -475,7 +462,7 @@ class MarzbanControlBot:
 
     async def run(self):
         """Starts the bot's polling loop."""
-        logger.info(f"Starting Bot v9.3 for Admin ID: {self.admin_id}...")
+        logger.info(f"Starting Bot v9.4 for Admin ID: {self.admin_id}...")
         while True:
             try:
                 await self.bot.polling(non_stop=True, timeout=120)
