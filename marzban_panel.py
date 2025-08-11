@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 # =================================================================
-# Marzban Complete Backup & Restore Panel - Modernized Version
+# Marzban Complete Backup & Restore Panel
 # Creator: @HEXMOSTAFA
-# Modernized & Optimized by AI Assistant
-# Version: 6.0 (Reverted to docker-compose)
+# Version: 6.0 (Single-Layer Archive & Final Version)
 # =================================================================
 
 import os
@@ -20,7 +19,6 @@ import tempfile
 import logging
 from logging.handlers import RotatingFileHandler
 from typing import Dict, Any, Optional
-from pathlib import Path
 
 try:
     from rich.console import Console
@@ -33,24 +31,24 @@ except ImportError:
     sys.exit(1)
 
 # --- Global Configuration ---
-SCRIPT_DIR = Path(__file__).resolve().parent
-CONFIG_FILE = SCRIPT_DIR / "config.json"
-FILES_TO_BACKUP = [Path("/var/lib/marzban"), Path("/opt/marzban")]
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
+FILES_TO_BACKUP = ["/var/lib/marzban", "/opt/marzban"]
 EXCLUDED_DATABASES = ['information_schema', 'mysql', 'performance_schema', 'sys']
 EXCLUDED_DIRS_IN_VARLIB = ['mysql', 'logs']
 CRON_JOB_IDENTIFIER = "# HEXMOSTAFA_MARZBAN_BACKUP_JOB"
-MARZBAN_SERVICE_PATH = Path("/opt/marzban")
-LOG_FILE = SCRIPT_DIR / "marzban_backup.log"
+MARZBAN_SERVICE_PATH = "/opt/marzban"
+LOG_FILE = os.path.join(SCRIPT_DIR, "marzban_backup.log")
 DB_BACKUP_DIR_NAME = "db_dumps"
 TG_BOT_FILE_NAME = "marzban_bot.py"
-DOTENV_PATH = MARZBAN_SERVICE_PATH / ".env"
+DOTENV_PATH = os.path.join(MARZBAN_SERVICE_PATH, ".env")
 
 # --- Setup Logging ---
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        RotatingFileHandler(LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5),
+        RotatingFileHandler(LOG_FILE, maxBytes=10*1024*1024, backupCount=5),
         logging.StreamHandler()
     ]
 )
@@ -68,14 +66,12 @@ console = Console(theme=custom_theme)
 # =================================================================
 
 def show_header():
-    """Displays the script header."""
     console.clear()
     header_text = Text("Marzban Complete Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 6.0", justify="center", style="header")
     console.print(Panel(header_text, style="blue", border_style="info"))
     console.print()
 
 def show_main_menu() -> str:
-    """Displays the main menu and gets user choice."""
     console.print(Panel(
         "[menu]1[/menu]. [bold]Create Full Backup[/bold]\n"
         "[menu]2[/menu]. [bold]Restore from Backup[/bold]\n"
@@ -87,8 +83,7 @@ def show_main_menu() -> str:
     return Prompt.ask("[prompt]Enter your choice[/prompt]", choices=["1", "2", "3", "4", "5"], default="5")
 
 def load_config_file() -> Optional[Dict[str, Any]]:
-    """Loads configuration from config.json."""
-    if not CONFIG_FILE.exists():
+    if not os.path.exists(CONFIG_FILE):
         return None
     try:
         with open(CONFIG_FILE, 'r') as f:
@@ -98,8 +93,7 @@ def load_config_file() -> Optional[Dict[str, Any]]:
         return None
 
 def find_dotenv_password() -> Optional[str]:
-    """Tries to find the database password from the .env file."""
-    if not DOTENV_PATH.exists():
+    if not os.path.exists(DOTENV_PATH):
         return None
     try:
         with open(DOTENV_PATH, 'r') as f:
@@ -114,14 +108,12 @@ def find_dotenv_password() -> Optional[str]:
         return None
 
 def get_config(ask_telegram: bool = False, ask_database: bool = False, ask_interval: bool = False) -> Dict[str, Any]:
-    """Prompts for user input and saves the configuration."""
     config = load_config_file() or {"telegram": {}, "database": {}}
     
     if ask_telegram:
         console.print(Panel("Telegram Bot Credentials", style="info"))
         config["telegram"]['bot_token'] = Prompt.ask("[prompt]Enter your Telegram Bot Token[/prompt]", default=config.get("telegram", {}).get('bot_token'))
         config["telegram"]['admin_chat_id'] = Prompt.ask("[prompt]Enter your Admin Chat ID[/prompt]", default=config.get("telegram", {}).get('admin_chat_id'))
-
     if ask_database:
         if find_database_container():
             console.print(Panel("Database Credentials", style="info"))
@@ -157,7 +149,6 @@ def get_config(ask_telegram: bool = False, ask_database: bool = False, ask_inter
     return config
 
 def log_message(message: str, style: str = "info"):
-    """Logs a message to the console and log file."""
     if not sys.stdout.isatty():
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}")
     else:
@@ -165,7 +156,6 @@ def log_message(message: str, style: str = "info"):
     logger.info(message)
 
 def find_database_container() -> Optional[str]:
-    """Finds the name of the MySQL or MariaDB container."""
     try:
         cmd = "docker ps --format '{{.Names}} {{.Image}}' | grep -E 'mysql|mariadb'"
         result = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
@@ -177,11 +167,10 @@ def find_database_container() -> Optional[str]:
         return None
 
 def run_marzban_command(action: str) -> bool:
-    """Runs a docker compose command in the Marzban directory."""
-    if not MARZBAN_SERVICE_PATH.is_dir():
+    if not os.path.isdir(MARZBAN_SERVICE_PATH):
         log_message("Marzban path not found. Is it installed?", "danger")
         return False
-    command = f"cd {MARZBAN_SERVICE_PATH} && docker-compose {action}"
+    command = f"cd {MARZBAN_SERVICE_PATH} && docker compose {action}"
     try:
         log_message(f"Running command: {command}", "info")
         subprocess.run(command, shell=True, check=True, capture_output=True, text=True, executable='/bin/bash')
@@ -195,11 +184,10 @@ def run_marzban_command(action: str) -> bool:
 # =================================================================
 
 def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
-    """Performs a full backup of Marzban panel."""
     log_message("Starting full backup process...", "info")
     timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    backup_temp_dir = Path(tempfile.mkdtemp(prefix="marzban_backup_"))
-    final_archive_path = Path(f"/tmp/marzban_backup_{timestamp}.tar.gz")
+    backup_temp_dir = tempfile.mkdtemp(prefix="marzban_backup_")
+    final_archive_path = f"/tmp/marzban_backup_{timestamp}.tar.gz"
 
     try:
         container_name = find_database_container()
@@ -207,14 +195,14 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
         if container_name and db_config.get('user') and db_config.get('password'):
             log_message("Found database container. Backing up databases...", "info")
             try:
-                db_backup_path = backup_temp_dir / DB_BACKUP_DIR_NAME
-                db_backup_path.mkdir()
+                db_backup_path = os.path.join(backup_temp_dir, DB_BACKUP_DIR_NAME)
+                os.makedirs(db_backup_path)
                 list_dbs_cmd = f"docker exec -i {container_name} mysql -u {db_config['user']} -p'{db_config['password']}' -e 'SHOW DATABASES;'"
                 result = subprocess.run(list_dbs_cmd, shell=True, check=True, capture_output=True, text=True)
                 databases = [db for db in result.stdout.strip().split('\n') if db not in EXCLUDED_DATABASES and db != 'Database']
                 for db in databases:
                     log_message(f"Dumping database: {db}", "info")
-                    dump_cmd = f"docker exec -i {container_name} mysqldump -u{db_config['user']} -p'{db_config['password']}' --databases {db} > {str(db_backup_path / f'{db}.sql')}"
+                    dump_cmd = f"docker exec -i {container_name} mysqldump -u{db_config['user']} -p'{db_config['password']}' --databases {db} > {os.path.join(db_backup_path, f'{db}.sql')}"
                     subprocess.run(dump_cmd, shell=True, check=True, executable='/bin/bash')
                 log_message("Database backup complete.", "success")
             except subprocess.CalledProcessError as e:
@@ -223,33 +211,37 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
                 log_message(f"An unexpected error occurred during database backup: {e}", "danger")
 
         log_message("Backing up filesystem...", "info")
-        fs_backup_path = backup_temp_dir / "filesystem"
-        fs_backup_path.mkdir()
-        
+        fs_backup_path = os.path.join(backup_temp_dir, "filesystem")
+        os.makedirs(fs_backup_path)
+
         def ignore_func(path, names):
             ignored_names = []
-            path_obj = Path(path)
-            if Path('/var/lib/marzban') in path_obj.parents:
+            if 'var' in path and 'lib' in path and 'marzban' in path:
                 ignored_names.extend(EXCLUDED_DIRS_IN_VARLIB)
             ignored_names.extend(['__pycache__', '.env.example', '*.sock*'])
             return set(ignored_names).intersection(names)
 
         for path in FILES_TO_BACKUP:
-            if path.exists():
-                dest_path = fs_backup_path / path.relative_to(path.anchor)
-                if path.is_dir():
+            if os.path.exists(path):
+                dest_path = os.path.join(fs_backup_path, os.path.relpath(path, '/'))
+                if os.path.isdir(path):
                     shutil.copytree(path, dest_path, ignore=ignore_func, dirs_exist_ok=True)
                 else:
-                    dest_path.parent.mkdir(parents=True, exist_ok=True)
+                    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                     shutil.copy2(path, dest_path)
                 log_message(f"Backed up: {path}", "info")
         
         log_message("File backup complete.", "success")
+        
+        # --- اصلاحیه اصلی: حذف فشرده‌سازی دو لایه و ایجاد آرشیو نهایی به صورت مستقیم
         log_message("Compressing backup into .tar.gz file...", "info")
         with tarfile.open(final_archive_path, "w:gz") as tar:
-            for item in backup_temp_dir.iterdir():
-                tar.add(item, arcname=item.name)
-        
+            if os.path.exists(os.path.join(backup_temp_dir, DB_BACKUP_DIR_NAME)):
+                 tar.add(os.path.join(backup_temp_dir, DB_BACKUP_DIR_NAME), arcname=DB_BACKUP_DIR_NAME)
+            if os.path.exists(os.path.join(backup_temp_dir, 'filesystem')):
+                 tar.add(os.path.join(backup_temp_dir, 'filesystem'), arcname='filesystem')
+        # --- پایان اصلاحیه ---
+
         log_message(f"Backup created successfully: {final_archive_path}", "success")
         
         tg_config = config.get('telegram', {})
@@ -273,28 +265,27 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
     finally:
         log_message("Cleaning up temporary files...", "info")
         shutil.rmtree(backup_temp_dir, ignore_errors=True)
-        if final_archive_path.exists():
-            final_archive_path.unlink()
+        if os.path.exists(final_archive_path):
+            os.remove(final_archive_path)
 
-def _restore_database_from_dump(container_name: str, db_config: Dict[str, str], db_dump_path: Path) -> bool:
-    """Restores databases from SQL dump files."""
+def _restore_database_from_dump(container_name: str, db_config: Dict[str, str], db_dump_path: str) -> bool:
     try:
-        sql_files = [f for f in db_dump_path.iterdir() if f.suffix == '.sql']
+        sql_files = [f for f in os.listdir(db_dump_path) if f.endswith('.sql')]
         if not sql_files:
             log_message("No database dumps found to restore.", "warning")
             return True
-        log_message("Restoring the following databases: " + ", ".join([f.stem for f in sql_files]), "info")
+        log_message("Restoring the following databases: " + ", ".join([f.replace('.sql', '') for f in sql_files]), "info")
         if not Confirm.ask("[danger]This will drop and recreate your existing databases. Continue?[/danger]"):
             log_message("Database restore cancelled by user.", "warning")
             return False
 
         for sql_file in sql_files:
-            db = sql_file.stem
+            db = sql_file.replace('.sql', '')
             log_message(f"Dropping and recreating database: {db}", "info")
             drop_cmd = f"docker exec -i {container_name} mysql -u{db_config['user']} -p'{db_config['password']}' -e 'DROP DATABASE IF EXISTS `{db}`; CREATE DATABASE `{db}`;'"
             subprocess.run(drop_cmd, shell=True, check=True, executable='/bin/bash')
             log_message(f"Importing data into database: {db}", "info")
-            import_cmd = f"docker exec -i {container_name} mysql -u{db_config['user']} -p'{db_config['password']}' {db} < {str(sql_file)}"
+            import_cmd = f"docker exec -i {container_name} mysql -u{db_config['user']} -p'{db_config['password']}' {db} < {os.path.join(db_dump_path, sql_file)}"
             subprocess.run(import_cmd, shell=True, check=True, executable='/bin/bash')
         log_message("✅ Database restore completed successfully.", "success")
         return True
@@ -305,9 +296,8 @@ def _restore_database_from_dump(container_name: str, db_config: Dict[str, str], 
         log_message(f"An unexpected error occurred during database restore: {e}", "danger")
         return False
 
-def _perform_restore(archive_path: Path, config: Dict[str, Any]):
-    """Main logic for the restore process."""
-    temp_dir = Path(tempfile.mkdtemp())
+def _perform_restore(archive_path: str, config: Dict[str, Any]):
+    temp_dir = tempfile.TemporaryDirectory()
     try:
         with console.status("[info]Stopping all Marzban services...[/info]", spinner="dots"):
             if not run_marzban_command("down"):
@@ -315,21 +305,40 @@ def _perform_restore(archive_path: Path, config: Dict[str, Any]):
         log_message("All Marzban services stopped.", "success")
         
         log_message(f"Extracting backup file '{archive_path}'...", "info")
+        
         with tarfile.open(archive_path, "r:gz") as tar:
-            tar.extractall(path=temp_dir)
+            tar.extractall(path=temp_dir.name)
         log_message("Extraction completed successfully.", "success")
+        
+        extracted_content = os.listdir(temp_dir.name)
+        base_dir_to_restore = ""
 
-        # Find the single directory inside the extracted folder
-        extracted_content_dirs = [item for item in temp_dir.iterdir() if item.is_dir()]
-        if not extracted_content_dirs:
-            raise Exception("Invalid backup archive format: No content directory found.")
-        extracted_dir = extracted_content_dirs[0]
+        if len(extracted_content) == 1 and os.path.isdir(os.path.join(temp_dir.name, extracted_content[0])):
+            base_dir_to_restore = os.path.join(temp_dir.name, extracted_content[0])
+        elif 'db_dumps' in extracted_content and 'filesystem' in extracted_content:
+            base_dir_to_restore = temp_dir.name
+        elif len(extracted_content) == 1 and extracted_content[0].endswith('.tar'):
+            nested_tar_path = os.path.join(temp_dir.name, extracted_content[0])
+            log_message(f"Found nested archive '{extracted_content[0]}'. Extracting...", "info")
+            with tarfile.open(nested_tar_path, "r") as nested_tar:
+                nested_tar.extractall(path=temp_dir.name)
+            os.remove(nested_tar_path)
+            log_message("Nested archive extracted successfully.", "success")
+            
+            extracted_dir_content = os.listdir(temp_dir.name)
+            for name in extracted_dir_content:
+                if os.path.isdir(os.path.join(temp_dir.name, name)) and (name == 'db_dumps' or name == 'filesystem'):
+                    base_dir_to_restore = temp_dir.name
+                    break
+        
+        if not base_dir_to_restore:
+             raise Exception("Could not find extracted directory in temporary location.")
 
         log_message("Restoring Marzban configuration files...", "info")
         for path in FILES_TO_BACKUP:
-            source_path = extracted_dir / path.relative_to(path.anchor)
-            if source_path.exists():
-                if path.exists():
+            source_path = os.path.join(base_dir_to_restore, os.path.relpath(path, '/'))
+            if os.path.exists(source_path):
+                if os.path.exists(path):
                     log_message(f"Removing existing directory: {path}", "warning")
                     shutil.rmtree(path)
                 log_message(f"Copying files from {source_path} to {path}", "info")
@@ -338,8 +347,8 @@ def _perform_restore(archive_path: Path, config: Dict[str, Any]):
 
         container_name = find_database_container()
         if container_name:
-            db_dump_path = extracted_dir / DB_BACKUP_DIR_NAME
-            if db_dump_path.is_dir():
+            db_dump_path = os.path.join(base_dir_to_restore, DB_BACKUP_DIR_NAME)
+            if os.path.isdir(db_dump_path):
                 if not _restore_database_from_dump(container_name, config['database'], db_dump_path):
                     log_message("Database restore failed. Aborting.", "danger")
                     return
@@ -350,13 +359,12 @@ def _perform_restore(archive_path: Path, config: Dict[str, Any]):
         log_message(f"A critical error occurred during restore: {e}", "danger")
     finally:
         log_message("Cleaning up temporary files...", "info")
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        temp_dir.cleanup()
         log_message("Starting Marzban services...", "info")
         run_marzban_command("up -d")
         console.print(Panel("[bold green]✅ Restore process finished. Please check your Marzban panel.[/bold green]"))
 
 def restore_flow():
-    """Interactive flow for restoring a backup."""
     show_header()
     console.print(Panel(
         "[bold]This is a destructive operation that will overwrite all Marzban data and databases.[/bold]\n"
@@ -370,15 +378,13 @@ def restore_flow():
     if not config.get('database'):
         log_message("Database credentials not provided. Cannot proceed with restore.", "danger")
         return
-    archive_path_str = Prompt.ask("[prompt]Enter the full path to your .tar.gz backup file[/prompt]")
-    archive_path = Path(archive_path_str)
-    if not archive_path.exists():
+    archive_path = Prompt.ask("[prompt]Enter the full path to your .tar.gz backup file[/prompt]")
+    if not os.path.exists(archive_path):
         log_message(f"Error: The file '{archive_path}' was not found. Aborting.", "danger")
         return
     _perform_restore(archive_path, config)
 
 def setup_bot_flow():
-    """Interactive flow for setting up the Telegram bot."""
     show_header()
     console.print(Panel("Telegram Bot Setup", style="info"))
     config = get_config(ask_telegram=True)
@@ -386,18 +392,22 @@ def setup_bot_flow():
         log_message("Bot token is required to set up the bot.", "danger")
         return
     
-    bot_script_path = SCRIPT_DIR / TG_BOT_FILE_NAME
-    if not bot_script_path.exists():
+    bot_script_path = os.path.join(SCRIPT_DIR, TG_BOT_FILE_NAME)
+    if not os.path.exists(bot_script_path):
         log_message(f"Bot script '{TG_BOT_FILE_NAME}' not found. Please ensure the installation script has run successfully.", "danger")
         return
     
     try:
         log_message("Checking and installing required Python libraries...", "info")
-        venv_pip = SCRIPT_DIR / 'venv' / 'bin' / 'pip'
-        subprocess.check_call([str(venv_pip), "install", "pyTelegramBotAPI"])
+        venv_pip = os.path.join(SCRIPT_DIR, 'venv', 'bin', 'pip')
+        try:
+            subprocess.check_call([venv_pip, "install", "pyTelegramBotAPI"])
+        except subprocess.CalledProcessError as e:
+            log_message(f"Failed to install required Python libraries: {e}", "danger")
+            return
         log_message("Libraries installed successfully. Continuing setup...", "success")
 
-        service_file_path = Path("/etc/systemd/system/marzban_bot.service")
+        service_file_path = "/etc/systemd/system/marzban_bot.service"
         service_content = f"""[Unit]
 Description=HexBackup Telegram Bot for Marzban
 After=network.target
@@ -405,7 +415,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory={SCRIPT_DIR}
-ExecStart={str(SCRIPT_DIR / 'venv' / 'bin' / 'python3')} {str(bot_script_path)}
+ExecStart={os.path.join(SCRIPT_DIR, 'venv', 'bin', 'python3')} {bot_script_path}
 Restart=always
 RestartSec=10
 [Install]
@@ -423,44 +433,35 @@ WantedBy=multi-user.target
             console.print("[bold green]✅ Telegram bot service is running successfully.[/bold green]")
         else:
             console.print("[bold red]❌ The bot service failed to start. Check logs with 'sudo journalctl -u marzban_bot.service'.[/bold red]")
-    except subprocess.CalledProcessError as e:
-        log_message(f"Failed to install required Python libraries or start service: {e}", "danger")
     except Exception as e:
         console.print(f"[bold red]❌ An unexpected error occurred: {e}[/bold red]")
 
 def setup_cronjob_flow(interactive: bool = True) -> bool:
-    """Interactive or automatic flow for setting up the cronjob."""
     if interactive:
         show_header()
         console.print(Panel("Automatic Backup Setup (Cronjob)", style="info"))
     config = load_config_file()
     if not config or not config.get("telegram", {}).get('bot_token'):
-        log_message("Telegram Bot is not configured. Please set up the bot first.", "danger")
+        log_message("Telegram Bot is not configured.", "danger")
         return False
     if interactive:
         config = get_config(ask_interval=True, ask_database=True)
     interval = config.get("telegram", {}).get('backup_interval')
-    if not interval or not str(interval).isdigit() or int(interval) <= 0:
-        log_message("Invalid backup interval. Please provide a positive number.", "danger")
+    if not interval or not interval.isdigit() or int(interval) <= 0:
         return False
-    
-    python_executable = SCRIPT_DIR / 'venv' / 'bin' / 'python3'
-    script_path = SCRIPT_DIR / Path(__file__).name
-    cron_command = f"*/{interval} * * * * {str(python_executable)} {str(script_path)} run-backup > /dev/null 2>&1"
-    
+    python_executable = os.path.join(SCRIPT_DIR, 'venv', 'bin', 'python3')
+    script_path = os.path.abspath(__file__)
+    cron_command = f"*/{interval} * * * * {python_executable} {script_path} run-backup > /dev/null 2>&1"
     if interactive:
         if not Confirm.ask(f"Add this to crontab?\n[info]{cron_command}[/info]"):
-            log_message("Crontab setup cancelled by user.", "warning")
             return False
     try:
         current_crontab = subprocess.run(['crontab', '-l'], capture_output=True, text=True, check=False).stdout
         new_lines = [line for line in current_crontab.splitlines() if CRON_JOB_IDENTIFIER not in line]
         new_lines.append(f"{cron_command} {CRON_JOB_IDENTIFIER}")
-        
         p = Popen(['crontab', '-'], stdin=PIPE)
         p.communicate(input=("\n".join(new_lines) + "\n").encode())
         if p.returncode != 0: raise Exception("Crontab command failed.")
-        
         log_message("✅ Crontab updated successfully!", "success")
         if not interactive:
             log_message("Performing initial backup...", "info")
@@ -471,7 +472,6 @@ def setup_cronjob_flow(interactive: bool = True) -> bool:
         return False
 
 def main():
-    """Main function to handle script execution."""
     if len(sys.argv) > 1:
         command = sys.argv[1]
         config = load_config_file()
@@ -481,7 +481,7 @@ def main():
             except Exception: sys.exit(1)
         elif command == 'do-restore':
             if len(sys.argv) > 2:
-                archive_path = Path(sys.argv[2])
+                archive_path = sys.argv[2]
                 try: _perform_restore(archive_path, config)
                 except Exception: sys.exit(1)
             else:
