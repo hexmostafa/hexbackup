@@ -3,7 +3,7 @@
 # HexBackup | Marzban Backup & Restore Panel - Finalized Version
 # Creator: @HEXMOSTAFA
 # Re-engineered & Optimized by AI Assistant
-# Version: 15.1 (Smart Non-Interactive Cronjob)
+# Version: 15.2 (Immediate Backup on Cron Setup)
 # =================================================================
 
 import os
@@ -71,7 +71,7 @@ console = Console(theme=custom_theme)
 
 def show_header():
     console.clear()
-    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 15.1", justify="center", style="header")
+    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 15.2", justify="center", style="header")
     console.print(Panel(header_text, style="blue", border_style="info"))
     console.print()
 
@@ -411,7 +411,6 @@ WantedBy=multi-user.target
     except Exception as e:
         console.print(f"[bold red]❌ An unexpected error occurred: {e}[/bold red]")
 
-# <<< CHANGE START: This function is now smarter and handles interactive vs. non-interactive modes >>>
 def setup_cronjob_flow(interactive: bool = True):
     """Setup or update cronjob. Can be called interactively or by the bot."""
     if interactive:
@@ -426,9 +425,9 @@ def setup_cronjob_flow(interactive: bool = True):
     if interactive:
         config = get_config(ask_interval=True)
 
-    interval = config.get("telegram", {}).get('backup_interval', '60')
-    if not str(interval).isdigit() or int(interval) <= 0:
-        log_message("Invalid or missing backup interval in config.json.", "danger")
+    interval = config.get("telegram", {}).get('backup_interval')
+    if not interval or not str(interval).isdigit() or int(interval) <= 0:
+        log_message("Invalid or missing backup interval in config.json. Cannot set up cronjob.", "danger")
         return
 
     venv_python = SCRIPT_DIR / 'venv' / 'bin' / 'python3'
@@ -436,18 +435,15 @@ def setup_cronjob_flow(interactive: bool = True):
     script_path = Path(__file__).resolve()
     cron_command = f"*/{interval} * * * * {python_executable} {str(script_path)} run-backup > /dev/null 2>&1"
     
-    # Skip confirmation if called non-interactively by the bot
     if interactive:
         if not Confirm.ask(f"Add this to crontab?\n[info]{cron_command}[/info]"):
             log_message("Crontab setup cancelled.", "warning")
             return
 
     try:
-        # Remove existing cron job
         current_crontab = subprocess.run(['crontab', '-l'], capture_output=True, text=True, check=False).stdout
         new_lines = [line for line in current_crontab.splitlines() if CRON_JOB_IDENTIFIER not in line]
         
-        # Add new job only if an interval is set (i.e., not disabling)
         if config.get("telegram", {}).get('backup_interval'):
             new_lines.append(f"{cron_command} {CRON_JOB_IDENTIFIER}")
 
@@ -456,10 +452,18 @@ def setup_cronjob_flow(interactive: bool = True):
         if p.returncode != 0: raise Exception("Crontab command failed.")
         
         log_message("✅ Crontab updated successfully!", "success")
-        print("Crontab updated successfully!") # Also print for bot script to capture
+        print("Crontab updated successfully!")
+
+        # <<< CHANGE START: Perform an initial backup after setting up the cron job >>>
+        if interactive or not sys.stdout.isatty(): # Run if interactive or called by bot
+            log_message("Performing an initial backup to test the new schedule...", "info")
+            print("Performing an initial backup to test the new schedule...")
+            run_full_backup(config, is_cron=False)
+            log_message("Initial backup completed successfully.", "success")
+        # <<< CHANGE END >>>
+
     except Exception as e:
         log_message(f"Error updating crontab: {str(e)}", "danger")
-# <<< CHANGE END >>>
 
 def main():
     if len(sys.argv) > 1:
@@ -477,7 +481,6 @@ def main():
                 else: log_message(f"Backup file not found: {archive_path}", "danger"); sys.exit(1)
             else:
                 log_message("Error: Restore command requires a file path argument.", "danger"); sys.exit(1)
-        # <<< CHANGE: Updated to call the function non-interactively >>>
         elif command == 'do-auto-backup-setup':
              setup_cronjob_flow(interactive=False)
         sys.exit(0)
@@ -503,7 +506,7 @@ def main():
                 log_message("Goodbye!", "info")
                 break
             Prompt.ask("\n[prompt]Press Enter to return to the main menu...[/prompt]")
-        except TypeError as e:
+        except (EOFError, TypeError) as e:
             log_message(f"A recoverable error occurred: {e}. Please try again.", "warning")
             Prompt.ask("\n[prompt]Press Enter to continue...[/prompt]")
 
