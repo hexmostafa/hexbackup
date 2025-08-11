@@ -3,7 +3,7 @@
 # HexBackup | Marzban Backup & Restore Panel - Finalized Version
 # Creator: @HEXMOSTAFA
 # Re-engineered & Optimized by AI Assistant
-# Version: 10.0 (Unified Docker & Improved Backup Structure)
+# Version: 13.0 (Final Fix for Backup/Restore Structure)
 # =================================================================
 
 import os
@@ -68,7 +68,7 @@ console = Console(theme=custom_theme)
 def show_header():
     """Displays the script header."""
     console.clear()
-    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 10.0", justify="center", style="header")
+    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 13.0", justify="center", style="header")
     console.print(Panel(header_text, style="blue", border_style="info"))
     console.print()
 
@@ -109,6 +109,18 @@ def find_dotenv_password() -> Optional[str]:
         return None
     except Exception as e:
         log_message(f"Error reading .env file: {e}", "danger")
+        return None
+
+def find_database_container() -> Optional[str]:
+    """Finds the name of the MySQL or MariaDB container."""
+    try:
+        cmd = "docker ps --format '{{.Names}} {{.Image}}' | grep -E 'mysql|mariadb'"
+        result = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
+        for line in result.stdout.strip().split('\n'):
+            if 'marzban' in line.lower():
+                return line.split()[0]
+        return None
+    except subprocess.CalledProcessError:
         return None
 
 def get_config(ask_telegram: bool = False, ask_database: bool = False, ask_interval: bool = False) -> Dict[str, Any]:
@@ -224,25 +236,30 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
         log_message("Backing up filesystem...", "info")
         fs_backup_path = backup_temp_dir / "filesystem"
         fs_backup_path.mkdir(parents=True, exist_ok=True)
-
-        def ignore_func(path, names):
-            # This is the corrected and refined logic
-            # It explicitly checks for the `mysql` directory within /var/lib/marzban
-            # and excludes it from the backup process entirely.
-            if Path(path) == Path('/var/lib/marzban'):
-                return ['mysql', 'logs']
-            
-            # Additional general exclusions
-            ignored = ['__pycache__', '.env.example', '*.sock*', 'logs']
-            return [name for name in names if any(pattern in name for pattern in ignored)]
         
+        # New, correct logic for copying files
         for path in FILES_TO_BACKUP:
             if path.exists():
-                # Correctly copies the content of each folder to a new path in temp directory
-                shutil.copytree(path, fs_backup_path / path.name, ignore=ignore_func, dirs_exist_ok=True)
-                log_message(f"Backed up: {path}", "info")
-            else:
-                log_message(f"Warning: Path not found - {path}", "warning")
+                if path.is_dir():
+                    log_message(f"Copying directory: {path}", "info")
+                    # Use a new directory to prevent overwriting during copy
+                    temp_copy_path = Path(tempfile.mkdtemp())
+                    shutil.copytree(path, temp_copy_path / path.name)
+                    
+                    # Now, correctly filter and copy files to the final destination
+                    if path == Path("/var/lib/marzban"):
+                        # Exclude `mysql` and `logs` directories
+                        if (temp_copy_path / path.name / "mysql").exists():
+                            shutil.rmtree(temp_copy_path / path.name / "mysql")
+                        if (temp_copy_path / path.name / "logs").exists():
+                            shutil.rmtree(temp_copy_path / path.name / "logs")
+                    
+                    shutil.copytree(temp_copy_path / path.name, fs_backup_path / path.name)
+                    shutil.rmtree(temp_copy_path)
+
+                elif path.is_file():
+                    log_message(f"Copying file: {path}", "info")
+                    shutil.copy2(path, fs_backup_path / path.name)
         
         log_message("File backup complete.", "success")
         log_message("Compressing backup into .tar.gz file...", "info")
@@ -251,7 +268,8 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
             if (backup_temp_dir / "db_dumps").is_dir():
                 tar.add(backup_temp_dir / "db_dumps", arcname="db_dumps")
             if (backup_temp_dir / "filesystem").is_dir():
-                tar.add(backup_temp_dir / "filesystem", arcname="filesystem")
+                for item in (backup_temp_dir / "filesystem").iterdir():
+                    tar.add(item, arcname=f"filesystem/{item.name}")
         
         log_message(f"Backup created successfully: {final_archive_path}", "success")
         
