@@ -3,7 +3,7 @@
 # HexBackup | Marzban Backup & Restore Panel - Finalized Version
 # Creator: @HEXMOSTAFA
 # Re-engineered & Optimized by AI Assistant
-# Version: 15.0 (Self-Healing Password Restore)
+# Version: 15.1 (Smart Non-Interactive Cronjob)
 # =================================================================
 
 import os
@@ -71,7 +71,7 @@ console = Console(theme=custom_theme)
 
 def show_header():
     console.clear()
-    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 15.0", justify="center", style="header")
+    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 15.1", justify="center", style="header")
     console.print(Panel(header_text, style="blue", border_style="info"))
     console.print()
 
@@ -220,7 +220,7 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
                     dump_cmd = f"docker exec -i {container_name} mysqldump -u{db_config['user']} -p'{db_config['password']}' --databases {db} > {str(db_backup_path / f'{db}.sql')}"
                     subprocess.run(dump_cmd, shell=True, check=True, executable='/bin/bash')
                 log_message("Database backup complete.", "success")
-            except Exception as e:
+            except subprocess.CalledProcessError as e:
                 log_message(f"An unexpected error occurred during database backup: {e.stderr}", "danger")
                 log_message("Hint: Is the database container running and password correct?", "warning")
         else:
@@ -277,30 +277,22 @@ def _perform_restore(archive_path: Path, config: Dict[str, Any]):
         fs_restore_path = temp_dir / "filesystem"
         if fs_restore_path.exists():
             log_message("Restoring configuration files...", "info")
-            # Restore /opt/marzban first to get the correct .env file
-            opt_marzban_backup = fs_restore_path / "opt_marzban"
-            if opt_marzban_backup.exists():
-                shutil.copytree(opt_marzban_backup, MARZBAN_SERVICE_PATH, dirs_exist_ok=True)
+            if (fs_restore_path / "opt_marzban").exists():
+                shutil.copytree(fs_restore_path / "opt_marzban", MARZBAN_SERVICE_PATH, dirs_exist_ok=True)
                 log_message(f"Restored '{MARZBAN_SERVICE_PATH}'.", "success")
-            
-            # Restore /var/lib/marzban
-            var_lib_marzban_backup = fs_restore_path / "var_lib_marzban"
-            if var_lib_marzban_backup.exists():
-                shutil.copytree(var_lib_marzban_backup, Path("/var/lib/marzban"), dirs_exist_ok=True)
+            if (fs_restore_path / "var_lib_marzban").exists():
+                shutil.copytree(fs_restore_path / "var_lib_marzban", Path("/var/lib/marzban"), dirs_exist_ok=True)
                 log_message(f"Restored '/var/lib/marzban'.", "success")
         
-        # <<< CHANGE START: Intelligent password self-healing >>>
         log_message("Reading database password from restored .env file...", "info")
         new_password = find_dotenv_password()
         if new_password:
             log_message("Password successfully read from backup. Updating current session.", "success")
             config['database']['password'] = new_password
-            # Also update the config file for future runs
             save_config_file(config)
             log_message("config.json has been updated with the correct password.", "success")
         else:
             log_message("Could not find password in restored .env file. Using password from config.json.", "warning")
-        # <<< CHANGE END >>>
             
         mysql_data_dir = Path("/var/lib/marzban/mysql")
         log_message(f"Clearing MySQL data directory ({mysql_data_dir}) for clean initialization...", "info")
@@ -315,16 +307,14 @@ def _perform_restore(archive_path: Path, config: Dict[str, Any]):
         
         db_restore_path = temp_dir / "db_dumps"
         sql_files = list(db_restore_path.glob("*.sql"))
-        if not sql_files:
-            log_message("No .sql file found in backup. Skipping database data import.", "warning")
-        else:
+        sql_file_to_restore = db_restore_path / "marzban.sql"
+        if not sql_file_to_restore.exists() and sql_files:
             sql_file_to_restore = sql_files[0]
-            if (db_restore_path / "marzban.sql").exists():
-                 sql_file_to_restore = db_restore_path / "marzban.sql"
 
+        if sql_file_to_restore.exists():
             container_name = find_database_container()
             db_user = config['database']['user']
-            db_pass = config['database']['password'] # This is now the self-healed password
+            db_pass = config['database']['password']
             if not container_name: raise Exception("Could not find database container after restart.")
             
             db_name_to_restore = sql_file_to_restore.stem
@@ -336,6 +326,8 @@ def _perform_restore(archive_path: Path, config: Dict[str, Any]):
                 log_message("Database imported successfully.", "success")
             else:
                 raise Exception(f"Database import failed: {result.stderr}")
+        else:
+            log_message("No .sql file found in backup. Skipping database data import.", "warning")
 
         console.print(Panel("[bold green]✅ Restore process finished. Please check your Marzban panel.[/bold green]"))
 
@@ -354,13 +346,10 @@ def restore_flow():
     if not Confirm.ask("[danger]Do you understand the risks and wish to continue?[/danger]"):
         log_message("Restore cancelled by user.", "warning")
         return
-    
-    # We still need a valid config to start, even if the password gets updated later.
     config = get_config(ask_database=True)
     if not config.get('database', {}).get('password'):
         log_message("Initial database credentials are required. Aborting.", "danger")
         return
-
     archive_path_str = Prompt.ask("[prompt]Enter the full path to your .tar.gz backup file[/prompt]")
     archive_path = Path(archive_path_str.strip())
     if not archive_path.is_file():
@@ -386,10 +375,14 @@ def setup_bot_flow():
         
     try:
         log_message("Installing required Python libraries for the bot...", "info")
-        pip_executable = sys.executable.replace('python3', 'pip3')
-        subprocess.check_call([pip_executable, "install", "pyTelegramBotAPI"])
+        venv_pip = SCRIPT_DIR / 'venv' / 'bin' / 'pip'
+        pip_executable = str(venv_pip) if venv_pip.exists() else 'pip3'
+        subprocess.check_call([pip_executable, "install", "--upgrade", "pyTelegramBotAPI", "aiohttp", "aiofiles"])
         
         service_file_path = Path("/etc/systemd/system/marzban_bot.service")
+        venv_python = SCRIPT_DIR / 'venv' / 'bin' / 'python3'
+        python_executable = str(venv_python) if venv_python.exists() else sys.executable
+
         service_content = f"""[Unit]
 Description=HexBackup Telegram Bot for Marzban
 After=network.target
@@ -397,7 +390,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory={SCRIPT_DIR}
-ExecStart={sys.executable} {str(bot_script_path)}
+ExecStart={python_executable} {str(bot_script_path)}
 Restart=always
 [Install]
 WantedBy=multi-user.target
@@ -418,37 +411,55 @@ WantedBy=multi-user.target
     except Exception as e:
         console.print(f"[bold red]❌ An unexpected error occurred: {e}[/bold red]")
 
-def setup_cronjob_flow():
-    show_header()
-    console.print(Panel("Automatic Backup Setup (Cronjob)", style="info"))
+# <<< CHANGE START: This function is now smarter and handles interactive vs. non-interactive modes >>>
+def setup_cronjob_flow(interactive: bool = True):
+    """Setup or update cronjob. Can be called interactively or by the bot."""
+    if interactive:
+        show_header()
+        console.print(Panel("Automatic Backup Setup (Cronjob)", style="info"))
+
     config = load_config_file()
     if not all([config, config.get("telegram", {}).get('bot_token'), config.get("database", {}).get('password')]):
         log_message("Bot and Database are not fully configured. Please run 'Setup Telegram Bot' (Option 3) first.", "danger")
         return
-        
-    config = get_config(ask_interval=True)
+
+    if interactive:
+        config = get_config(ask_interval=True)
+
     interval = config.get("telegram", {}).get('backup_interval', '60')
     if not str(interval).isdigit() or int(interval) <= 0:
-        log_message("Invalid backup interval.", "danger")
+        log_message("Invalid or missing backup interval in config.json.", "danger")
         return
-        
-    python_executable = sys.executable
+
+    venv_python = SCRIPT_DIR / 'venv' / 'bin' / 'python3'
+    python_executable = str(venv_python) if venv_python.exists() else sys.executable
     script_path = Path(__file__).resolve()
-    cron_command = f"*/{interval} * * * * {str(python_executable)} {str(script_path)} run-backup > /dev/null 2>&1"
-    if not Confirm.ask(f"Add this to crontab?\n[info]{cron_command}[/info]"):
-        log_message("Crontab setup cancelled.", "warning")
-        return
-        
+    cron_command = f"*/{interval} * * * * {python_executable} {str(script_path)} run-backup > /dev/null 2>&1"
+    
+    # Skip confirmation if called non-interactively by the bot
+    if interactive:
+        if not Confirm.ask(f"Add this to crontab?\n[info]{cron_command}[/info]"):
+            log_message("Crontab setup cancelled.", "warning")
+            return
+
     try:
+        # Remove existing cron job
         current_crontab = subprocess.run(['crontab', '-l'], capture_output=True, text=True, check=False).stdout
         new_lines = [line for line in current_crontab.splitlines() if CRON_JOB_IDENTIFIER not in line]
-        new_lines.append(f"{cron_command} {CRON_JOB_IDENTIFIER}")
+        
+        # Add new job only if an interval is set (i.e., not disabling)
+        if config.get("telegram", {}).get('backup_interval'):
+            new_lines.append(f"{cron_command} {CRON_JOB_IDENTIFIER}")
+
         p = Popen(['crontab', '-'], stdin=PIPE)
         p.communicate(input=("\n".join(new_lines) + "\n").encode())
         if p.returncode != 0: raise Exception("Crontab command failed.")
+        
         log_message("✅ Crontab updated successfully!", "success")
+        print("Crontab updated successfully!") # Also print for bot script to capture
     except Exception as e:
         log_message(f"Error updating crontab: {str(e)}", "danger")
+# <<< CHANGE END >>>
 
 def main():
     if len(sys.argv) > 1:
@@ -466,8 +477,9 @@ def main():
                 else: log_message(f"Backup file not found: {archive_path}", "danger"); sys.exit(1)
             else:
                 log_message("Error: Restore command requires a file path argument.", "danger"); sys.exit(1)
+        # <<< CHANGE: Updated to call the function non-interactively >>>
         elif command == 'do-auto-backup-setup':
-             setup_cronjob_flow() # This allows the bot to trigger a cron setup
+             setup_cronjob_flow(interactive=False)
         sys.exit(0)
 
     if os.geteuid() != 0:
