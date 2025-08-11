@@ -200,6 +200,8 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
     final_archive_path = Path(f"/root/marzban_backup_{timestamp}.tar.gz")
     final_archive_path.parent.mkdir(parents=True, exist_ok=True)
     try:
+        run_marzban_command(f"up -d {DB_SERVICE_NAME}")
+        sleep(10)
         container_name = find_database_container()
         db_config = config.get('database', {})
         if container_name and db_config.get('user') and db_config.get('password'):
@@ -207,8 +209,6 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
             db_backup_path = backup_temp_dir / "db_dumps"
             db_backup_path.mkdir()
             try:
-                run_marzban_command(f"up -d {DB_SERVICE_NAME}")
-                sleep(10)
                 list_dbs_cmd = f"docker exec -i {container_name} mysql -u{db_config['user']} -p'{db_config['password']}' -e 'SHOW DATABASES;'"
                 result = subprocess.run(list_dbs_cmd, shell=True, check=True, capture_output=True, text=True)
                 databases = [db for db in result.stdout.strip().split('\n') if db not in EXCLUDED_DATABASES and db != 'Database']
@@ -257,21 +257,16 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
             os.remove(final_archive_path)
             log_message("Removed local cron backup file.", "info")
 
-# <<< CHANGE START: This function is now simpler, as the caller handles starting the service >>>
 def _restore_database_from_dump(db_config: Dict[str, str], db_dump_path: Path) -> bool:
-    """Assumes the DB service is running and imports the SQL files."""
     try:
         sql_files = sorted([f for f in db_dump_path.iterdir() if f.suffix == '.sql'])
         if not sql_files:
             log_message("No database dumps found to restore.", "warning")
             return True
-
-        # Find the name of the newly created container
         container_name = find_database_container()
         if not container_name:
             log_message("Could not find the running database container after 'up' command.", "danger")
             return False
-        
         log_message(f"Found running container '{container_name}'. Importing data...", "info")
         for sql_file in sql_files:
             db = sql_file.stem
@@ -280,31 +275,25 @@ def _restore_database_from_dump(db_config: Dict[str, str], db_dump_path: Path) -
             subprocess.run(drop_cmd, shell=True, check=True, executable='/bin/bash')
             import_cmd = f"docker exec -i {container_name} mysql -u{db_config['user']} -p'{db_config['password']}' {db} < {str(sql_file)}"
             subprocess.run(import_cmd, shell=True, check=True, executable='/bin/bash')
-        
         log_message("✅ Database restore completed successfully.", "success")
         return True
     except Exception as e:
         log_message(f"An unexpected error occurred during database restore: {e}", "danger")
         logger.exception("DB restore failed")
         return False
-# <<< CHANGE END >>>
 
-# <<< CHANGE START: The order of operations is now corrected >>>
 def _perform_restore(archive_path: Path, config: Dict[str, Any]):
     temp_dir = Path(tempfile.mkdtemp(prefix="restore_"))
     try:
         with console.status("[info]Stopping all Marzban services...[/info]", spinner="dots"):
             run_marzban_command("down")
         log_message("All Marzban services stopped.", "success")
-
         log_message(f"Extracting backup file '{archive_path}'...", "info")
         with tarfile.open(archive_path, "r:gz") as tar:
             tar.extractall(path=temp_dir)
         log_message("Extraction completed successfully.", "success")
-
         fs_restore_path = temp_dir / "filesystem"
         db_dump_path = temp_dir / "db_dumps"
-
         if fs_restore_path.exists():
             log_message("Restoring Marzban configuration files...", "info")
             for unique_name, destination_path in PATHS_TO_BACKUP.items():
@@ -318,17 +307,13 @@ def _perform_restore(archive_path: Path, config: Dict[str, Any]):
             log_message("Filesystem restore completed successfully.", "success")
         else:
             log_message("Filesystem data not found in backup. Skipping.", "warning")
-
-        # --- Corrected DB Restore Logic ---
         if db_dump_path.is_dir() and any(db_dump_path.iterdir()):
             db_config = config.get('database')
             if db_config:
-                # 1. Start the DB service FIRST to create the container
                 log_message(f"Starting database service '{DB_SERVICE_NAME}' for restore...", "info")
                 if run_marzban_command(f"up -d {DB_SERVICE_NAME}"):
                     log_message("Waiting for DB to initialize...", "info")
                     sleep(15)
-                    # 2. THEN, call the function to import data
                     if not _restore_database_from_dump(db_config, db_dump_path):
                         log_message("Database restore failed. The panel may not work correctly.", "danger")
                 else:
@@ -337,7 +322,6 @@ def _perform_restore(archive_path: Path, config: Dict[str, Any]):
                 log_message("DB config not found. Skipping restore of database dumps.", "warning")
         else:
             log_message("No database dumps found in backup. Skipping.", "warning")
-
     except Exception as e:
         log_message(f"A critical error occurred during restore: {e}", "danger")
         logger.exception("Restore process failed")
@@ -347,7 +331,6 @@ def _perform_restore(archive_path: Path, config: Dict[str, Any]):
         log_message("Starting all Marzban services...", "info")
         run_marzban_command("up -d")
         console.print(Panel("[bold green]✅ Restore process finished. Please check your Marzban panel.[/bold green]"))
-# <<< CHANGE END >>>
 
 def restore_flow():
     show_header()
