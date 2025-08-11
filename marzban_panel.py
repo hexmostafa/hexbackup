@@ -3,7 +3,7 @@
 # HexBackup | Marzban Backup & Restore Panel - Finalized Version
 # Creator: @HEXMOSTAFA
 # Re-engineered & Optimized by AI Assistant
-# Version: 14.7 (Fast Backup Logic)
+# Version: 14.8 (Correct Database Restore Logic)
 # =================================================================
 
 import os
@@ -71,7 +71,7 @@ console = Console(theme=custom_theme)
 
 def show_header():
     console.clear()
-    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 14.7", justify="center", style="header")
+    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 14.8", justify="center", style="header")
     console.print(Panel(header_text, style="blue", border_style="info"))
     console.print()
 
@@ -200,7 +200,6 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
     final_archive_path = Path(f"/root/marzban_backup_{timestamp}.tar.gz")
     final_archive_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        # <<< CHANGE: Removed 'docker compose up' and 'sleep' for a faster backup, assuming the DB is already running. >>>
         container_name = find_database_container()
         db_config = config.get('database', {})
         if container_name and db_config.get('user') and db_config.get('password'):
@@ -229,9 +228,7 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
             if path.exists():
                 log_message(f"Copying '{path}' to backup as '{unique_name}'", "info")
                 destination = fs_backup_path / unique_name
-                ignore_func = None
-                if "var_lib_marzban" in unique_name:
-                    ignore_func = shutil.ignore_patterns('mysql', 'logs', '*.sock', '*.sock.lock')
+                ignore_func = shutil.ignore_patterns('mysql', 'logs', '*.sock', '*.sock.lock')
                 shutil.copytree(path, destination, dirs_exist_ok=True, ignore=ignore_func, symlinks=False)
             else:
                 log_message(f"Warning: Path not found, skipping - {path}", "warning")
@@ -260,80 +257,86 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
             os.remove(final_archive_path)
             log_message("Removed local cron backup file.", "info")
 
-def _restore_database_from_dump(db_config: Dict[str, str], db_dump_path: Path) -> bool:
-    try:
-        sql_files = sorted([f for f in db_dump_path.iterdir() if f.suffix == '.sql'])
-        if not sql_files:
-            log_message("No database dumps found to restore.", "warning")
-            return True
-        container_name = find_database_container()
-        if not container_name:
-            log_message("Could not find the running database container after 'up' command.", "danger")
-            return False
-        log_message(f"Found running container '{container_name}'. Importing data...", "info")
-        for sql_file in sql_files:
-            db = sql_file.stem
-            log_message(f"Restoring database: {db}", "info")
-            drop_cmd = f"docker exec -i {container_name} mysql -u{db_config['user']} -p'{db_config['password']}' -e 'DROP DATABASE IF EXISTS `{db}`; CREATE DATABASE `{db}`;'"
-            subprocess.run(drop_cmd, shell=True, check=True, executable='/bin/bash')
-            import_cmd = f"docker exec -i {container_name} mysql -u{db_config['user']} -p'{db_config['password']}' {db} < {str(sql_file)}"
-            subprocess.run(import_cmd, shell=True, check=True, executable='/bin/bash')
-        log_message("✅ Database restore completed successfully.", "success")
-        return True
-    except Exception as e:
-        log_message(f"An unexpected error occurred during database restore: {e}", "danger")
-        logger.exception("DB restore failed")
-        return False
-
+# <<< CHANGE START: This entire function has been rewritten to match the old script's successful logic >>>
 def _perform_restore(archive_path: Path, config: Dict[str, Any]):
     temp_dir = Path(tempfile.mkdtemp(prefix="restore_"))
     try:
-        with console.status("[info]Stopping all Marzban services...[/info]", spinner="dots"):
-            run_marzban_command("down")
-        log_message("All Marzban services stopped.", "success")
-        log_message(f"Extracting backup file '{archive_path}'...", "info")
+        # --- 1. Unzip backup ---
+        log_message("Verifying and extracting backup file...", "info")
         with tarfile.open(archive_path, "r:gz") as tar:
             tar.extractall(path=temp_dir)
-        log_message("Extraction completed successfully.", "success")
+        log_message("Backup extracted successfully.", "success")
+
+        # --- 2. Stop services ---
+        with console.status("[info]Stopping all Marzban services...[/info]", spinner="dots"):
+            if not run_marzban_command("down"):
+                raise Exception("Could not stop Marzban services.")
+        log_message("All Marzban services stopped.", "success")
+        
+        # --- 3. Restore filesystem ---
         fs_restore_path = temp_dir / "filesystem"
-        db_dump_path = temp_dir / "db_dumps"
         if fs_restore_path.exists():
-            log_message("Restoring Marzban configuration files...", "info")
-            for unique_name, destination_path in PATHS_TO_BACKUP.items():
-                source_path = fs_restore_path / unique_name
-                if source_path.exists():
-                    if destination_path.exists():
-                        log_message(f"Removing existing directory: {destination_path}", "warning")
-                        shutil.rmtree(destination_path)
-                    log_message(f"Restoring '{unique_name}' to '{destination_path}'", "info")
-                    shutil.copytree(source_path, destination_path)
-            log_message("Filesystem restore completed successfully.", "success")
+            log_message("Restoring configuration files...", "info")
+            # Restore /opt/marzban first
+            if (fs_restore_path / "opt_marzban").exists():
+                shutil.copytree(fs_restore_path / "opt_marzban", MARZBAN_SERVICE_PATH, dirs_exist_ok=True)
+                log_message(f"Restored '{MARZBAN_SERVICE_PATH}'.", "success")
+            # Restore /var/lib/marzban
+            if (fs_restore_path / "var_lib_marzban").exists():
+                shutil.copytree(fs_restore_path / "var_lib_marzban", Path("/var/lib/marzban"), dirs_exist_ok=True)
+                log_message(f"Restored '/var/lib/marzban'.", "success")
         else:
             log_message("Filesystem data not found in backup. Skipping.", "warning")
-        if db_dump_path.is_dir() and any(db_dump_path.iterdir()):
-            db_config = config.get('database')
-            if db_config:
-                log_message(f"Starting database service '{DB_SERVICE_NAME}' for restore...", "info")
-                if run_marzban_command(f"up -d {DB_SERVICE_NAME}"):
-                    log_message("Waiting for DB to initialize...", "info")
-                    sleep(15)
-                    if not _restore_database_from_dump(db_config, db_dump_path):
-                        log_message("Database restore failed. The panel may not work correctly.", "danger")
-                else:
-                    log_message(f"Could not start the '{DB_SERVICE_NAME}' service. Skipping DB restore.", "danger")
+
+        # --- 4. CRITICAL STEP: Recreate MySQL data directory to force initialization ---
+        mysql_data_dir = Path("/var/lib/marzban/mysql")
+        log_message(f"Clearing MySQL data directory ({mysql_data_dir})...", "info")
+        if mysql_data_dir.exists():
+            shutil.rmtree(mysql_data_dir)
+        mysql_data_dir.mkdir(parents=True, exist_ok=True)
+        log_message("MySQL data directory recreated for a clean initialization.", "success")
+
+        # --- 5. Start all services to initialize the database ---
+        with console.status("[info]Starting all Marzban services to initialize DB...[/info]", spinner="dots"):
+            if not run_marzban_command("up -d"):
+                raise Exception("Could not start Marzban services.")
+        log_message("All Marzban services started.", "success")
+        log_message("Waiting for MySQL service to stabilize (30 seconds)...", "info")
+        sleep(30)
+        
+        # --- 6. Import the database dump ---
+        db_restore_path = temp_dir / "db_dumps"
+        sql_file_path = db_restore_path / "marzban.sql" # Assuming the main db is 'marzban'
+        
+        if sql_file_path.exists():
+            container_name = find_database_container()
+            db_user = config['database']['user']
+            db_pass = config['database']['password']
+            if not container_name:
+                raise Exception("Could not find database container after restart.")
+            
+            log_message(f"Importing data into database '{DB_SERVICE_NAME}'...", "info")
+            restore_cmd = f"cat {sql_file_path} | docker exec -i {container_name} mysql -u{db_user} -p'{db_pass}' {DB_SERVICE_NAME}"
+            
+            result = subprocess.run(restore_cmd, shell=True, capture_output=True, text=True)
+            if result.returncode == 0:
+                log_message("Database imported successfully.", "success")
             else:
-                log_message("DB config not found. Skipping restore of database dumps.", "warning")
+                raise Exception(f"Database import failed: {result.stderr}")
         else:
-            log_message("No database dumps found in backup. Skipping.", "warning")
+            log_message("marzban.sql not found in backup. Skipping database data import.", "warning")
+
+        console.print(Panel("[bold green]✅ Restore process finished. Please check your Marzban panel.[/bold green]"))
+
     except Exception as e:
         log_message(f"A critical error occurred during restore: {e}", "danger")
         logger.exception("Restore process failed")
+        log_message("Attempting to bring Marzban service back up as a safety measure...", "info")
+        run_marzban_command("up -d")
     finally:
         log_message("Cleaning up temporary files...", "info")
         shutil.rmtree(temp_dir, ignore_errors=True)
-        log_message("Starting all Marzban services...", "info")
-        run_marzban_command("up -d")
-        console.print(Panel("[bold green]✅ Restore process finished. Please check your Marzban panel.[/bold green]"))
+# <<< CHANGE END >>>
 
 def restore_flow():
     show_header()
