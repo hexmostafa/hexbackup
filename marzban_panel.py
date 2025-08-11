@@ -3,7 +3,7 @@
 # HexBackup | Marzban Backup & Restore Panel - Finalized Version
 # Creator: @HEXMOSTAFA
 # Re-engineered & Optimized by AI Assistant
-# Version: 7.0 (Stable Backup & Restore Logic)
+# Version: 8.0 (Stable Backup & Restore Logic)
 # =================================================================
 
 import os
@@ -37,7 +37,6 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = SCRIPT_DIR / "config.json"
 FILES_TO_BACKUP = [Path("/var/lib/marzban"), Path("/opt/marzban")]
 EXCLUDED_DATABASES = ['information_schema', 'mysql', 'performance_schema', 'sys']
-EXCLUDED_DIRS_IN_VARLIB = ['mysql', 'logs']
 CRON_JOB_IDENTIFIER = "# HEXMOSTAFA_MARZBAN_BACKUP_JOB"
 MARZBAN_SERVICE_PATH = Path("/opt/marzban")
 LOG_FILE = SCRIPT_DIR / "marzban_backup.log"
@@ -69,7 +68,7 @@ console = Console(theme=custom_theme)
 def show_header():
     """Displays the script header."""
     console.clear()
-    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 7.0", justify="center", style="header")
+    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 8.0", justify="center", style="header")
     console.print(Panel(header_text, style="blue", border_style="info"))
     console.print()
 
@@ -227,30 +226,30 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
         fs_backup_path = backup_temp_dir / "filesystem"
         fs_backup_path.mkdir(parents=True, exist_ok=True)
         
+        # This function now correctly ignores the `mysql` directory entirely from /var/lib/marzban
         def ignore_func(path, names):
-            ignored_names = []
-            path_obj = Path(path)
-            if Path('/var/lib/marzban') in path_obj.parents:
-                ignored_names.extend(EXCLUDED_DIRS_IN_VARLIB)
-            ignored_names.extend(['__pycache__', '.env.example', '*.sock*'])
-            return set(ignored_names).intersection(names)
+            if Path(path) == Path("/var/lib/marzban"):
+                return ["mysql"]
+            # To handle other exclusions
+            ignored = ["__pycache__", ".env.example", "*.sock*", "logs"]
+            return [name for name in names if any(pattern in name for pattern in ignored)]
 
         for path in FILES_TO_BACKUP:
             if path.exists():
-                dest_path = fs_backup_path / str(path).replace("/", "_")
-                if path.is_dir():
-                    shutil.copytree(path, dest_path, ignore=ignore_func, dirs_exist_ok=True)
-                else:
-                    dest_path.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(path, dest_path)
+                # Correctly copies the content of each folder to a new path in temp directory
+                shutil.copytree(path, fs_backup_path / path.name, ignore=ignore_func, dirs_exist_ok=True)
                 log_message(f"Backed up: {path}", "info")
+            else:
+                log_message(f"Warning: Path not found - {path}", "warning")
         
         log_message("File backup complete.", "success")
         log_message("Compressing backup into .tar.gz file...", "info")
         
         with tarfile.open(final_archive_path, "w:gz") as tar:
-            tar.add(backup_temp_dir / "db_dumps", arcname="db_dumps")
-            tar.add(backup_temp_dir / "filesystem", arcname="filesystem")
+            if (backup_temp_dir / "db_dumps").is_dir():
+                tar.add(backup_temp_dir / "db_dumps", arcname="db_dumps")
+            if (backup_temp_dir / "filesystem").is_dir():
+                tar.add(backup_temp_dir / "filesystem", arcname="filesystem")
         
         log_message(f"Backup created successfully: {final_archive_path}", "success")
         
@@ -275,7 +274,7 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
     finally:
         log_message("Cleaning up temporary files...", "info")
         shutil.rmtree(backup_temp_dir, ignore_errors=True)
-        if final_archive_path.exists():
+        if final_archive_path.exists() and not is_cron:
             pass # Keep the file for manual use
 
 def _restore_database_from_dump(container_name: str, db_config: Dict[str, str], db_dump_path: Path) -> bool:
@@ -321,14 +320,13 @@ def _perform_restore(archive_path: Path, config: Dict[str, Any]):
             tar.extractall(path=temp_dir)
         log_message("Extraction completed successfully.", "success")
         
-        # --- Restore Logic: Find and copy files from the new backup structure ---
         log_message("Restoring Marzban configuration files...", "info")
         db_dump_path = temp_dir / "db_dumps"
         fs_restore_path = temp_dir / "filesystem"
 
         if fs_restore_path.exists():
             for path in FILES_TO_BACKUP:
-                source_path = fs_restore_path / str(path).replace("/", "_")
+                source_path = fs_restore_path / path.name
                 if source_path.exists():
                     if path.exists():
                         log_message(f"Removing existing directory: {path}", "warning")
@@ -349,7 +347,6 @@ def _perform_restore(archive_path: Path, config: Dict[str, Any]):
                 log_message("No database dumps found in backup. Skipping database restore.", "warning")
         else:
             log_message("No database container found. Skipping database restore.", "warning")
-        # --- End of Restore Logic ---
 
     except Exception as e:
         log_message(f"A critical error occurred during restore: {e}", "danger")
