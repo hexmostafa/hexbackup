@@ -3,7 +3,7 @@
 # HexBackup | Marzban Backup & Restore Panel - Finalized Version
 # Creator: @HEXMOSTAFA
 # Re-engineered & Optimized by AI Assistant
-# Version: 14.6 (Correct Restore Order of Operations)
+# Version: 14.7 (Fast Backup Logic)
 # =================================================================
 
 import os
@@ -71,7 +71,7 @@ console = Console(theme=custom_theme)
 
 def show_header():
     console.clear()
-    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 14.6", justify="center", style="header")
+    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 14.7", justify="center", style="header")
     console.print(Panel(header_text, style="blue", border_style="info"))
     console.print()
 
@@ -200,8 +200,7 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
     final_archive_path = Path(f"/root/marzban_backup_{timestamp}.tar.gz")
     final_archive_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        run_marzban_command(f"up -d {DB_SERVICE_NAME}")
-        sleep(10)
+        # <<< CHANGE: Removed 'docker compose up' and 'sleep' for a faster backup, assuming the DB is already running. >>>
         container_name = find_database_container()
         db_config = config.get('database', {})
         if container_name and db_config.get('user') and db_config.get('password'):
@@ -219,8 +218,10 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
                 log_message("Database backup complete.", "success")
             except Exception as e:
                 log_message(f"An unexpected error occurred during database backup: {e}", "danger")
+                log_message("Hint: Is the database container running?", "warning")
         else:
             log_message("No database container found or credentials missing. Skipping database backup.", "warning")
+        
         log_message("Backing up filesystem...", "info")
         fs_backup_path = backup_temp_dir / "filesystem"
         fs_backup_path.mkdir()
@@ -234,11 +235,13 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
                 shutil.copytree(path, destination, dirs_exist_ok=True, ignore=ignore_func, symlinks=False)
             else:
                 log_message(f"Warning: Path not found, skipping - {path}", "warning")
+        
         log_message("File backup complete.", "success")
         log_message(f"Compressing backup into '{final_archive_path}'...", "info")
         with tarfile.open(final_archive_path, "w:gz") as tar:
             tar.add(str(backup_temp_dir), arcname=".")
         log_message(f"Backup created successfully: {final_archive_path}", "success")
+        
         tg_config = config.get('telegram', {})
         if tg_config.get('bot_token') and tg_config.get('admin_chat_id'):
             log_message("Sending backup to Telegram...", "info")
