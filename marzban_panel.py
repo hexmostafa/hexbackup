@@ -3,7 +3,7 @@
 # HexBackup | Marzban Backup & Restore Panel - Finalized Version
 # Creator: @HEXMOSTAFA
 # Re-engineered & Optimized by AI Assistant
-# Version: 14.9 (Intelligent Bot Setup)
+# Version: 15.0 (Self-Healing Password Restore)
 # =================================================================
 
 import os
@@ -71,7 +71,7 @@ console = Console(theme=custom_theme)
 
 def show_header():
     console.clear()
-    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 14.9", justify="center", style="header")
+    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 15.0", justify="center", style="header")
     console.print(Panel(header_text, style="blue", border_style="info"))
     console.print()
 
@@ -96,6 +96,14 @@ def load_config_file() -> Optional[Dict[str, Any]]:
         log_message("Invalid config file format. It will be recreated.", "danger")
         return None
 
+def save_config_file(config: Dict[str, Any]):
+    """Saves the provided config dictionary to the config file."""
+    try:
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=4)
+    except Exception as e:
+        log_message(f"Failed to save config file: {e}", "danger")
+
 def find_dotenv_password() -> Optional[str]:
     if not DOTENV_PATH.exists():
         return None
@@ -103,7 +111,7 @@ def find_dotenv_password() -> Optional[str]:
         with open(DOTENV_PATH, 'r', encoding='utf-8') as f:
             for line in f:
                 if line.strip().startswith(('MYSQL_ROOT_PASSWORD=', 'MARIADB_ROOT_PASSWORD=')):
-                    return line.strip().split('=', 1)[1]
+                    return line.strip().split('=', 1)[1].strip()
             return None
     except Exception as e:
         log_message(f"Error reading .env file: {e}", "danger")
@@ -148,13 +156,10 @@ def get_config(ask_telegram: bool = False, ask_database: bool = False, ask_inter
     if ask_interval:
         config.setdefault('telegram', {})
         config["telegram"]['backup_interval'] = Prompt.ask("[prompt]Enter auto backup interval in minutes[/prompt]", default=str(config.get("telegram", {}).get('backup_interval', '60')))
-    try:
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(config, f, indent=4)
-        if any([ask_telegram, ask_database, ask_interval]):
-            console.print(f"[success]Settings saved to '{CONFIG_FILE}'[/success]")
-    except Exception as e:
-        console.print(f"[danger]Failed to save config file: {str(e)}[/danger]")
+
+    save_config_file(config)
+    if any([ask_telegram, ask_database, ask_interval]):
+        console.print(f"[success]Settings saved to '{CONFIG_FILE}'[/success]")
     return config
 
 def log_message(message: str, style: str = "info"):
@@ -216,10 +221,10 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
                     subprocess.run(dump_cmd, shell=True, check=True, executable='/bin/bash')
                 log_message("Database backup complete.", "success")
             except Exception as e:
-                log_message(f"An unexpected error occurred during database backup: {e}", "danger")
-                log_message("Hint: Is the database container running?", "warning")
+                log_message(f"An unexpected error occurred during database backup: {e.stderr}", "danger")
+                log_message("Hint: Is the database container running and password correct?", "warning")
         else:
-            log_message("No database container found or credentials missing. Skipping database backup.", "warning")
+            log_message("No database container found or credentials missing in config.json. Skipping database backup.", "warning")
         
         log_message("Backing up filesystem...", "info")
         fs_backup_path = backup_temp_dir / "filesystem"
@@ -272,13 +277,31 @@ def _perform_restore(archive_path: Path, config: Dict[str, Any]):
         fs_restore_path = temp_dir / "filesystem"
         if fs_restore_path.exists():
             log_message("Restoring configuration files...", "info")
-            if (fs_restore_path / "opt_marzban").exists():
-                shutil.copytree(fs_restore_path / "opt_marzban", MARZBAN_SERVICE_PATH, dirs_exist_ok=True)
+            # Restore /opt/marzban first to get the correct .env file
+            opt_marzban_backup = fs_restore_path / "opt_marzban"
+            if opt_marzban_backup.exists():
+                shutil.copytree(opt_marzban_backup, MARZBAN_SERVICE_PATH, dirs_exist_ok=True)
                 log_message(f"Restored '{MARZBAN_SERVICE_PATH}'.", "success")
-            if (fs_restore_path / "var_lib_marzban").exists():
-                shutil.copytree(fs_restore_path / "var_lib_marzban", Path("/var/lib/marzban"), dirs_exist_ok=True)
+            
+            # Restore /var/lib/marzban
+            var_lib_marzban_backup = fs_restore_path / "var_lib_marzban"
+            if var_lib_marzban_backup.exists():
+                shutil.copytree(var_lib_marzban_backup, Path("/var/lib/marzban"), dirs_exist_ok=True)
                 log_message(f"Restored '/var/lib/marzban'.", "success")
         
+        # <<< CHANGE START: Intelligent password self-healing >>>
+        log_message("Reading database password from restored .env file...", "info")
+        new_password = find_dotenv_password()
+        if new_password:
+            log_message("Password successfully read from backup. Updating current session.", "success")
+            config['database']['password'] = new_password
+            # Also update the config file for future runs
+            save_config_file(config)
+            log_message("config.json has been updated with the correct password.", "success")
+        else:
+            log_message("Could not find password in restored .env file. Using password from config.json.", "warning")
+        # <<< CHANGE END >>>
+            
         mysql_data_dir = Path("/var/lib/marzban/mysql")
         log_message(f"Clearing MySQL data directory ({mysql_data_dir}) for clean initialization...", "info")
         if mysql_data_dir.exists(): shutil.rmtree(mysql_data_dir)
@@ -291,16 +314,17 @@ def _perform_restore(archive_path: Path, config: Dict[str, Any]):
         sleep(30)
         
         db_restore_path = temp_dir / "db_dumps"
-        # Find any .sql file, but prefer 'marzban.sql'
         sql_files = list(db_restore_path.glob("*.sql"))
-        sql_file_to_restore = db_restore_path / "marzban.sql"
-        if not sql_file_to_restore.exists() and sql_files:
+        if not sql_files:
+            log_message("No .sql file found in backup. Skipping database data import.", "warning")
+        else:
             sql_file_to_restore = sql_files[0]
+            if (db_restore_path / "marzban.sql").exists():
+                 sql_file_to_restore = db_restore_path / "marzban.sql"
 
-        if sql_file_to_restore.exists():
             container_name = find_database_container()
             db_user = config['database']['user']
-            db_pass = config['database']['password']
+            db_pass = config['database']['password'] # This is now the self-healed password
             if not container_name: raise Exception("Could not find database container after restart.")
             
             db_name_to_restore = sql_file_to_restore.stem
@@ -312,8 +336,6 @@ def _perform_restore(archive_path: Path, config: Dict[str, Any]):
                 log_message("Database imported successfully.", "success")
             else:
                 raise Exception(f"Database import failed: {result.stderr}")
-        else:
-            log_message("No .sql file found in backup. Skipping database data import.", "warning")
 
         console.print(Panel("[bold green]✅ Restore process finished. Please check your Marzban panel.[/bold green]"))
 
@@ -332,10 +354,13 @@ def restore_flow():
     if not Confirm.ask("[danger]Do you understand the risks and wish to continue?[/danger]"):
         log_message("Restore cancelled by user.", "warning")
         return
+    
+    # We still need a valid config to start, even if the password gets updated later.
     config = get_config(ask_database=True)
     if not config.get('database', {}).get('password'):
-        log_message("Database credentials are required. Aborting.", "danger")
+        log_message("Initial database credentials are required. Aborting.", "danger")
         return
+
     archive_path_str = Prompt.ask("[prompt]Enter the full path to your .tar.gz backup file[/prompt]")
     archive_path = Path(archive_path_str.strip())
     if not archive_path.is_file():
@@ -343,13 +368,11 @@ def restore_flow():
         return
     _perform_restore(archive_path, config)
 
-# <<< CHANGE START: This function is now more intelligent >>>
 def setup_bot_flow():
     show_header()
     console.print(Panel("Telegram Bot Setup", style="info"))
-    console.print("[info]For the bot to function correctly, especially for backups, it needs access to both Telegram and Database credentials.[/info]")
+    console.print("[info]For the bot to function correctly, it needs access to both Telegram and Database credentials.[/info]")
     
-    # Ask for both Telegram and Database credentials
     config = get_config(ask_telegram=True, ask_database=True)
     
     if not all([config.get('telegram', {}).get('bot_token'), config.get('telegram', {}).get('admin_chat_id'), config.get('database', {}).get('password')]):
@@ -394,8 +417,6 @@ WantedBy=multi-user.target
             console.print("[bold red]❌ The bot service failed to start. Check logs with 'journalctl -u marzban_bot'.[/bold red]")
     except Exception as e:
         console.print(f"[bold red]❌ An unexpected error occurred: {e}[/bold red]")
-# <<< CHANGE END >>>
-
 
 def setup_cronjob_flow():
     show_header()
@@ -434,21 +455,19 @@ def main():
         command = sys.argv[1]
         config = load_config_file()
         if not config:
-            log_message("Configuration file not found. Please run the script interactively first.", "danger")
+            log_message("Configuration file not found. Cannot run non-interactively.", "danger")
             sys.exit(1)
         if command == 'run-backup':
             run_full_backup(config, is_cron=True)
         elif command == 'do-restore':
             if len(sys.argv) > 2:
                 archive_path = Path(sys.argv[2])
-                if archive_path.is_file():
-                    _perform_restore(archive_path, config)
-                else:
-                    log_message(f"Backup file not found: {archive_path}", "danger")
-                    sys.exit(1)
+                if archive_path.is_file(): _perform_restore(archive_path, config)
+                else: log_message(f"Backup file not found: {archive_path}", "danger"); sys.exit(1)
             else:
-                log_message("Error: Restore command requires a file path argument.", "danger")
-                sys.exit(1)
+                log_message("Error: Restore command requires a file path argument.", "danger"); sys.exit(1)
+        elif command == 'do-auto-backup-setup':
+             setup_cronjob_flow() # This allows the bot to trigger a cron setup
         sys.exit(0)
 
     if os.geteuid() != 0:
