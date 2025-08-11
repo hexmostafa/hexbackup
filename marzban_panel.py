@@ -3,7 +3,7 @@
 # HexBackup | Marzban Backup & Restore Panel - Finalized Version
 # Creator: @HEXMOSTAFA
 # Re-engineered & Optimized by AI Assistant
-# Version: 8.0 (Stable Backup & Restore Logic)
+# Version: 10.0 (Unified Docker & Improved Backup Structure)
 # =================================================================
 
 import os
@@ -68,7 +68,7 @@ console = Console(theme=custom_theme)
 def show_header():
     """Displays the script header."""
     console.clear()
-    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 8.0", justify="center", style="header")
+    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 10.0", justify="center", style="header")
     console.print(Panel(header_text, style="blue", border_style="info"))
     console.print()
 
@@ -162,30 +162,29 @@ def log_message(message: str, style: str = "info"):
         console.print(f"[{style}]{message}[/{style}]")
     logger.info(message)
 
-def find_database_container() -> Optional[str]:
-    """Finds the name of the MySQL or MariaDB container."""
-    try:
-        cmd = "docker ps --format '{{.Names}} {{.Image}}' | grep -E 'mysql|mariadb'"
-        result = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
-        for line in result.stdout.strip().split('\n'):
-            if 'marzban' in line.lower():
-                return line.split()[0]
-        return None
-    except subprocess.CalledProcessError:
-        return None
-
 def run_marzban_command(action: str) -> bool:
     """Runs a docker compose command in the Marzban directory."""
     if not MARZBAN_SERVICE_PATH.is_dir():
         log_message("Marzban path not found. Is it installed?", "danger")
         return False
-    command = f"cd {MARZBAN_SERVICE_PATH} && docker-compose {action}"
+    
+    # Try the new `docker compose` syntax first
+    command = f"cd {MARZBAN_SERVICE_PATH} && docker compose {action}"
     try:
         log_message(f"Running command: {command}", "info")
         subprocess.run(command, shell=True, check=True, capture_output=True, text=True, executable='/bin/bash')
         return True
     except subprocess.CalledProcessError as e:
-        log_message(f"Command failed: {e.stderr}", "danger")
+        log_message(f"Command with 'docker compose' failed: {e.stderr}", "warning")
+    
+    # Fallback to the old `docker-compose` syntax
+    command = f"cd {MARZBAN_SERVICE_PATH} && docker-compose {action}"
+    try:
+        log_message(f"Attempting command with 'docker-compose': {command}", "info")
+        subprocess.run(command, shell=True, check=True, capture_output=True, text=True, executable='/bin/bash')
+        return True
+    except subprocess.CalledProcessError as e:
+        log_message(f"Command with 'docker-compose' failed: {e.stderr}", "danger")
         return False
 
 # =================================================================
@@ -225,15 +224,18 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
         log_message("Backing up filesystem...", "info")
         fs_backup_path = backup_temp_dir / "filesystem"
         fs_backup_path.mkdir(parents=True, exist_ok=True)
-        
-        # This function now correctly ignores the `mysql` directory entirely from /var/lib/marzban
-        def ignore_func(path, names):
-            if Path(path) == Path("/var/lib/marzban"):
-                return ["mysql"]
-            # To handle other exclusions
-            ignored = ["__pycache__", ".env.example", "*.sock*", "logs"]
-            return [name for name in names if any(pattern in name for pattern in ignored)]
 
+        def ignore_func(path, names):
+            # This is the corrected and refined logic
+            # It explicitly checks for the `mysql` directory within /var/lib/marzban
+            # and excludes it from the backup process entirely.
+            if Path(path) == Path('/var/lib/marzban'):
+                return ['mysql', 'logs']
+            
+            # Additional general exclusions
+            ignored = ['__pycache__', '.env.example', '*.sock*', 'logs']
+            return [name for name in names if any(pattern in name for pattern in ignored)]
+        
         for path in FILES_TO_BACKUP:
             if path.exists():
                 # Correctly copies the content of each folder to a new path in temp directory
