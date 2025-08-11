@@ -1,3 +1,5 @@
 rich
 requests==2.32.3
-pytelegrambotapi==4.17.0
+pyTelegramBotAPI
+aiohttp
+aiofiles
