@@ -3,7 +3,7 @@
 # HexBackup | Marzban Backup & Restore Panel - Finalized Version
 # Creator: @HEXMOSTAFA
 # Re-engineered & Optimized by AI Assistant
-# Version: 14.3 (Complete & Corrected)
+# Version: 14.5 (Correct Docker Service Handling)
 # =================================================================
 
 import os
@@ -39,6 +39,7 @@ PATHS_TO_BACKUP = {
     "var_lib_marzban": Path("/var/lib/marzban"),
     "opt_marzban": Path("/opt/marzban")
 }
+DB_SERVICE_NAME = "mysql"  # <<< The service name in docker-compose.yml
 EXCLUDED_DATABASES = ['information_schema', 'mysql', 'performance_schema', 'sys']
 CRON_JOB_IDENTIFIER = "# HEXMOSTAFA_MARZBAN_BACKUP_JOB"
 MARZBAN_SERVICE_PATH = Path("/opt/marzban")
@@ -69,14 +70,12 @@ console = Console(theme=custom_theme)
 # =================================================================
 
 def show_header():
-    """Displays the script header."""
     console.clear()
-    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 14.3", justify="center", style="header")
+    header_text = Text("HexBackup | Marzban Backup & Restore Panel\nCreator: @HEXMOSTAFA | Version 14.5", justify="center", style="header")
     console.print(Panel(header_text, style="blue", border_style="info"))
     console.print()
 
 def show_main_menu() -> str:
-    """Displays the main menu and gets user choice."""
     console.print(Panel(
         "[menu]1[/menu]. [bold]Create Full Backup[/bold]\n"
         "[menu]2[/menu]. [bold]Restore from Backup[/bold]\n"
@@ -103,9 +102,7 @@ def find_dotenv_password() -> Optional[str]:
     try:
         with open(DOTENV_PATH, 'r') as f:
             for line in f:
-                if line.strip().startswith('MYSQL_ROOT_PASSWORD='):
-                    return line.strip().split('=', 1)[1]
-                if line.strip().startswith('MARIADB_ROOT_PASSWORD='):
+                if line.strip().startswith(('MYSQL_ROOT_PASSWORD=', 'MARIADB_ROOT_PASSWORD=')):
                     return line.strip().split('=', 1)[1]
             return None
     except Exception as e:
@@ -168,22 +165,28 @@ def log_message(message: str, style: str = "info"):
     if sys.stdout.isatty():
         console.print(f"[{style}]{message}[/{style}]")
     else:
-        print(f"[{level.name}] {message}")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}")
 
 def run_marzban_command(action: str) -> bool:
     if not MARZBAN_SERVICE_PATH.is_dir():
-        log_message(f"Marzban path '{MARZBAN_SERVICE_PATH}' not found. Is it installed?", "danger")
+        log_message("Marzban path not found. Is it installed?", "danger")
         return False
-    for compose_cmd in ["docker compose", "docker-compose"]:
-        command = f"cd {MARZBAN_SERVICE_PATH} && {compose_cmd} {action}"
-        try:
-            log_message(f"Running command: {compose_cmd} {action}", "info")
-            subprocess.run(command, shell=True, check=True, capture_output=True, text=True, executable='/bin/bash')
-            return True
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            stderr = getattr(e, 'stderr', str(e))
-            log_message(f"Command with '{compose_cmd}' failed: {stderr}", "warning")
-    log_message("Could not execute command with 'docker compose' or 'docker-compose'.", "danger")
+    command = f"cd {MARZBAN_SERVICE_PATH} && docker compose {action}"
+    try:
+        log_message(f"Running command: docker compose {action}", "info")
+        subprocess.run(command, shell=True, check=True, capture_output=True, text=True, executable='/bin/bash')
+        return True
+    except subprocess.CalledProcessError as e:
+        log_message(f"Command with 'docker compose' failed: {e.stderr}", "warning")
+    command = f"cd {MARZBAN_SERVICE_PATH} && docker-compose {action}"
+    try:
+        log_message(f"Attempting command with 'docker-compose': docker-compose {action}", "info")
+        subprocess.run(command, shell=True, check=True, capture_output=True, text=True, executable='/bin/bash')
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        stderr = getattr(e, 'stderr', str(e))
+        log_message(f"Command with 'docker-compose' failed: {stderr}", "danger")
+        return False
     return False
 
 # =================================================================
@@ -204,8 +207,9 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
             db_backup_path = backup_temp_dir / "db_dumps"
             db_backup_path.mkdir()
             try:
-                run_marzban_command(f"up -d {container_name}")
-                sleep(5)
+                # <<< CHANGE: Use the defined service name for docker compose commands >>>
+                run_marzban_command(f"up -d {DB_SERVICE_NAME}")
+                sleep(10) # Give DB time to start
                 list_dbs_cmd = f"docker exec -i {container_name} mysql -u{db_config['user']} -p'{db_config['password']}' -e 'SHOW DATABASES;'"
                 result = subprocess.run(list_dbs_cmd, shell=True, check=True, capture_output=True, text=True)
                 databases = [db for db in result.stdout.strip().split('\n') if db not in EXCLUDED_DATABASES and db != 'Database']
@@ -242,7 +246,7 @@ def run_full_backup(config: Dict[str, Any], is_cron: bool = False):
             url = f"https://api.telegram.org/bot{tg_config['bot_token']}/sendDocument"
             caption = f"✅ Marzban Backup ({'Auto' if is_cron else 'Manual'})\n📅 {timestamp}"
             with open(final_archive_path, 'rb') as f:
-                requests.post(url, data={'chat_id': tg_config['admin_chat_id'], 'caption': caption}, files={'document': f}, timeout=300)
+                requests.post(url, data={'chat_id': tg_config['admin_chat_id'], 'caption': caption}, files={'document': f}, timeout=300).raise_for_status()
             log_message("Backup sent to Telegram!", "success")
     except Exception as e:
         log_message(f"A critical error occurred during backup: {e}", "danger")
@@ -261,9 +265,12 @@ def _restore_database_from_dump(db_config: Dict[str, str], db_dump_path: Path) -
         return False
     try:
         sql_files = sorted([f for f in db_dump_path.iterdir() if f.suffix == '.sql'])
-        if not sql_files: return True
-        log_message(f"Starting database container '{container_name}' for restore...", "info")
-        if not run_marzban_command(f"up -d {container_name}"):
+        if not sql_files:
+            log_message("No database dumps found to restore.", "warning")
+            return True
+        # <<< CHANGE: Use the defined service name for docker compose commands >>>
+        log_message(f"Starting database service '{DB_SERVICE_NAME}' for restore...", "info")
+        if not run_marzban_command(f"up -d {DB_SERVICE_NAME}"):
             raise Exception("Could not start the database container.")
         log_message("Waiting for DB to initialize...", "info")
         sleep(15)
@@ -442,21 +449,26 @@ def main():
         sys.exit(1)
     
     while True:
-        show_header()
-        choice = show_main_menu()
-        if choice == "1":
-            config = get_config(ask_telegram=True, ask_database=True)
-            run_full_backup(config)
-        elif choice == "2":
-            restore_flow()
-        elif choice == "3":
-            setup_bot_flow()
-        elif choice == "4":
-            setup_cronjob_flow()
-        elif choice == "5":
-            log_message("Goodbye!", "info")
-            break
-        Prompt.ask("\n[prompt]Press Enter to return to the main menu...[/prompt]")
+        try:
+            show_header()
+            choice = show_main_menu()
+            if choice == "1":
+                config = get_config(ask_telegram=True, ask_database=True)
+                run_full_backup(config)
+            elif choice == "2":
+                restore_flow()
+            elif choice == "3":
+                setup_bot_flow()
+            elif choice == "4":
+                setup_cronjob_flow()
+            elif choice == "5":
+                log_message("Goodbye!", "info")
+                break
+            Prompt.ask("\n[prompt]Press Enter to return to the main menu...[/prompt]")
+        except (TypeError) as e:
+            # Catching the specific 'int' object has no attribute 'name' error
+            log_message(f"A recoverable error occurred: {e}. Please try again.", "warning")
+            Prompt.ask("\n[prompt]Press Enter to continue...[/prompt]")
 
 if __name__ == "__main__":
     try:
